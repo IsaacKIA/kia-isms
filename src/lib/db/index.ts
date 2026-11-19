@@ -45,9 +45,18 @@ async function createAdapter(): Promise<DatabaseAdapter> {
     };
   }
 
-  const dataDir = process.env.PGLITE_DATA_DIR || path.join(process.cwd(), 'data', 'pgdata');
-  fs.mkdirSync(path.dirname(dataDir), { recursive: true });
-  const pglite = new PGlite(dataDir);
+  const isVercel = Boolean(process.env.VERCEL);
+  const defaultDir = isVercel
+    ? path.join('/tmp', 'kia-isms-pgdata')
+    : path.join(process.cwd(), 'data', 'pgdata');
+  const dataDir = process.env.PGLITE_DATA_DIR || defaultDir;
+  let pglite: PGlite;
+  try {
+    fs.mkdirSync(path.dirname(dataDir), { recursive: true });
+    pglite = new PGlite(dataDir);
+  } catch {
+    pglite = new PGlite();
+  }
   await pglite.waitReady;
 
   return {
