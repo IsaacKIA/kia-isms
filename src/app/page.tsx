@@ -2257,17 +2257,49 @@ export default function KiaIsmsApp() {
                   <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                     <div className="sm:col-span-2">
                       <label className="block font-semibold text-slate-700 mb-1">
-                        School / University Name *
+                        School / University Name * (Select existing school or type new)
                       </label>
                       <input
                         type="text"
+                        list="kia-partner-schools-list"
                         value={newStudyOpp.institution_name}
-                        onChange={(e) =>
-                          setNewStudyOpp({ ...newStudyOpp, institution_name: e.target.value })
-                        }
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const existingSchool = state.studyOpportunities.find(
+                            (so: any) =>
+                              so.institution_name.toLowerCase() === val.trim().toLowerCase()
+                          );
+                          if (existingSchool) {
+                            setNewStudyOpp({
+                              ...newStudyOpp,
+                              institution_name: existingSchool.institution_name,
+                              institution_type: existingSchool.institution_type || 'University',
+                              country: existingSchool.country || newStudyOpp.country,
+                              city: existingSchool.city || '',
+                              currency: existingSchool.currency || newStudyOpp.currency,
+                              english_requirement:
+                                existingSchool.english_requirement ||
+                                newStudyOpp.english_requirement,
+                              financial_requirement:
+                                existingSchool.financial_requirement ||
+                                newStudyOpp.financial_requirement,
+                              visa_requirement:
+                                existingSchool.visa_requirement || newStudyOpp.visa_requirement,
+                            });
+                          } else {
+                            setNewStudyOpp({ ...newStudyOpp, institution_name: val });
+                          }
+                        }}
                         placeholder="e.g. Coventry University / University of Debrecen / Seneca Polytechnic"
                         className="w-full rounded-lg border border-slate-300 px-3 py-1.5"
                       />
+                      <datalist id="kia-partner-schools-list">
+                        {Array.from(
+                          new Set(state.studyOpportunities.map((so: any) => so.institution_name))
+                        ).map((schoolName: any) => (
+                          <option key={schoolName} value={schoolName} />
+                        ))}
+                      </datalist>
                     </div>
                     <div>
                       <label className="block font-semibold text-slate-700 mb-1">
@@ -2518,12 +2550,29 @@ export default function KiaIsmsApp() {
                       />
                     </div>
                   </div>
-                  <div className="flex justify-end gap-2 pt-2">
+                  <div className="flex flex-wrap justify-end gap-2 pt-2">
                     <button
                       onClick={() => setShowNewStudyOppForm(false)}
                       className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-semibold"
                     >
                       Cancel
+                    </button>
+                    <button
+                      onClick={async () => {
+                        const res = await dispatchAction('CREATE_STUDY_OPPORTUNITY', newStudyOpp);
+                        if (res) {
+                          // Keep the same school details so user can immediately add another programme to this school!
+                          setNewStudyOpp({
+                            ...newStudyOpp,
+                            program_name: '',
+                            notes: '',
+                          });
+                        }
+                      }}
+                      className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold flex items-center gap-1.5"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Save &amp; Add Another Programme to Same School
                     </button>
                     <button
                       onClick={async () => {
@@ -2540,7 +2589,7 @@ export default function KiaIsmsApp() {
                       }}
                       className="px-5 py-2 rounded-xl bg-blue-700 hover:bg-blue-800 text-white font-bold"
                     >
-                      Save School & Programme Offer
+                      Save &amp; Close
                     </button>
                   </div>
                 </div>
@@ -2637,83 +2686,210 @@ export default function KiaIsmsApp() {
                 </div>
               )}
 
-              {/* Partner Universities & Study Programme Offers Catalogue */}
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-3">
-                <h3 className="font-bold text-sm text-slate-900">
-                  Partner Universities & Study Programme Offers ({state.studyOpportunities.length})
-                </h3>
-                <div className="grid grid-cols-1 gap-3">
-                  {state.studyOpportunities.map((so: any) => (
-                    <div
-                      key={so.id}
-                      className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-slate-50 transition flex flex-col md:flex-row md:items-center justify-between gap-4"
-                    >
-                      <div className="space-y-1.5">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-mono font-bold text-blue-800 px-2 py-0.5 rounded bg-blue-50 border border-blue-200">
-                            {so.reference_code}
-                          </span>
-                          <strong className="text-sm text-slate-900">
-                            {so.institution_name}
-                          </strong>
-                          <span className="text-slate-500 font-medium">
-                            ({so.city ? `${so.city}, ` : ''}
-                            {so.country} • {so.institution_type})
-                          </span>
-                          {so.scholarship_available && (
-                            <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 font-bold text-[10px]">
-                              ★ Scholarship / Offer Available
-                            </span>
-                          )}
+              {/* Partner Universities & Grouped Study Programme Offers Catalogue (One School -> Many Programmes) */}
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-bold text-sm text-slate-900">
+                      Partner Schools &amp; Grouped Programme Offers (
+                      {
+                        Array.from(
+                          new Set(state.studyOpportunities.map((so: any) => so.institution_name))
+                        ).length
+                      }{' '}
+                      Partner School(s) • {state.studyOpportunities.length} Programme Offer(s))
+                    </h3>
+                    <p className="text-slate-500 text-[11px]">
+                      Each Partner School can offer multiple Foundation, Undergraduate, Postgraduate, and TVET programmes. Click &ldquo;+ Add Programme to This School&rdquo; on any school card to expand its catalogue.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  {Object.entries(
+                    state.studyOpportunities.reduce((acc: Record<string, any[]>, so: any) => {
+                      const key = so.institution_name || 'Unassigned School';
+                      if (!acc[key]) acc[key] = [];
+                      acc[key].push(so);
+                      return acc;
+                    }, {})
+                  ).map(([schoolName, programs]: [string, any]) => {
+                    const first = programs[0];
+                    return (
+                      <div
+                        key={schoolName}
+                        className="rounded-2xl border border-slate-200 overflow-hidden bg-white shadow-xs"
+                      >
+                        {/* Parent School Header */}
+                        <div className="bg-slate-900 text-white px-5 py-3.5 flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-xl bg-amber-500 text-slate-950 font-black flex items-center justify-center text-xs shrink-0">
+                              UNI
+                            </div>
+                            <div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h4 className="font-bold text-sm text-white">{schoolName}</h4>
+                                <span className="px-2 py-0.5 rounded bg-white/10 text-amber-300 text-[10px] font-bold">
+                                  {first.institution_type || 'University'}
+                                </span>
+                                <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-200 text-[10px] font-mono font-bold">
+                                  {programs.length} Programme(s)
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-300 mt-0.5">
+                                {first.city ? `${first.city}, ` : ''}
+                                {first.country} • Default English Rule: {first.english_requirement}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => {
+                              setNewStudyOpp({
+                                institution_name: first.institution_name,
+                                institution_type: first.institution_type || 'University',
+                                country: first.country,
+                                city: first.city || '',
+                                program_name: '',
+                                field_of_study: first.field_of_study || 'Business & Management',
+                                qualification_level: "Bachelor's Degree",
+                                duration: '3-4 Years',
+                                tuition_fee: Number(first.tuition_fee || 12000),
+                                currency: first.currency || 'GBP',
+                                application_fee: Number(first.application_fee || 0),
+                                intake_period: first.intake_period || 'September / Fall',
+                                scholarship_available: Boolean(first.scholarship_available),
+                                scholarship_details: first.scholarship_details || '',
+                                accommodation_available: Boolean(first.accommodation_available),
+                                entry_requirements:
+                                  first.entry_requirements ||
+                                  "WASSCE Credit C6+ / HND / Bachelor's 2nd Class Lower",
+                                english_requirement:
+                                  first.english_requirement ||
+                                  'MOI Letter Accepted (Ghanaian University/SHS Medium of Instruction)',
+                                financial_requirement:
+                                  first.financial_requirement ||
+                                  '28-Day Bank Statement / Blocked Account Proof of Funds',
+                                visa_requirement:
+                                  first.visa_requirement || 'Student Visa (CAS / LOA / I-20 Required)',
+                                notes: '',
+                              });
+                              setShowNewStudyOppForm(true);
+                              setShowNewStudyAppForm(false);
+                            }}
+                            className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            + Add Programme to {schoolName}
+                          </button>
                         </div>
-                        <p className="text-slate-800">
-                          Programme: <strong className="text-blue-950">{so.program_name}</strong> (
-                          {so.qualification_level} • {so.field_of_study} • {so.duration}) • Intake:{' '}
-                          <strong>{so.intake_period}</strong>
-                        </p>
-                        <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-600">
-                          <span>
-                            <strong>Tuition:</strong>{' '}
-                            {Number(so.tuition_fee || 0) > 0
-                              ? `${so.currency} ${Number(so.tuition_fee).toLocaleString()} / yr`
-                              : 'Contact Advisor / State-Funded'}
-                          </span>
-                          {so.scholarship_details && (
-                            <span className="text-emerald-800 font-semibold">
-                              <strong>Offer Package:</strong> {so.scholarship_details}
-                            </span>
-                          )}
+
+                        {/* School's Programmes List */}
+                        <div className="divide-y divide-slate-200">
+                          {programs.map((so: any) => (
+                            <div
+                              key={so.id}
+                              className="p-4 bg-slate-50/50 hover:bg-slate-50 transition flex flex-col md:flex-row md:items-center justify-between gap-4"
+                            >
+                              <div className="space-y-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-mono font-bold text-blue-800 px-2 py-0.5 rounded bg-blue-50 border border-blue-200">
+                                    {so.reference_code}
+                                  </span>
+                                  <strong className="text-sm text-blue-950">
+                                    {so.program_name}
+                                  </strong>
+                                  <span className="px-2 py-0.5 rounded bg-slate-200 text-slate-800 font-semibold text-[10px]">
+                                    {so.qualification_level}
+                                  </span>
+                                  <span className="text-slate-500">
+                                    • {so.field_of_study} • {so.duration} • Intake:{' '}
+                                    <strong>{so.intake_period}</strong>
+                                  </span>
+                                  {so.scholarship_available && (
+                                    <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 font-bold text-[10px]">
+                                      ★ Scholarship / Offer Available
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-600">
+                                  <span>
+                                    <strong>Tuition:</strong>{' '}
+                                    {Number(so.tuition_fee || 0) > 0
+                                      ? `${so.currency} ${Number(so.tuition_fee).toLocaleString()} / yr`
+                                      : 'Contact Advisor / State-Funded'}
+                                  </span>
+                                  {so.scholarship_details && (
+                                    <span className="text-emerald-800 font-semibold">
+                                      <strong>Offer Package:</strong> {so.scholarship_details}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-slate-500">
+                                  <strong>Academic:</strong> {so.entry_requirements} •{' '}
+                                  <strong>English:</strong> {so.english_requirement} •{' '}
+                                  <strong>Funds/Visa:</strong>{' '}
+                                  {so.financial_requirement || so.visa_requirement}
+                                </p>
+                              </div>
+
+                              <div className="flex items-center gap-2 shrink-0">
+                                <button
+                                  onClick={() => {
+                                    setNewStudyApp({
+                                      ...newStudyApp,
+                                      study_opportunity_id: so.id,
+                                    });
+                                    setShowNewStudyAppForm(true);
+                                    setShowNewStudyOppForm(false);
+                                  }}
+                                  className="px-2.5 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-800 text-white font-semibold"
+                                >
+                                  Apply Student
+                                </button>
+                                <select
+                                  value={so.status || 'Active'}
+                                  onChange={(e) =>
+                                    dispatchAction('TOGGLE_STUDY_OPPORTUNITY_STATUS', {
+                                      study_opportunity_id: so.id,
+                                      status: e.target.value,
+                                    })
+                                  }
+                                  className={`rounded-lg border px-2.5 py-1.5 text-xs font-bold ${
+                                    so.status === 'Active'
+                                      ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                                      : so.status === 'Upcoming'
+                                      ? 'bg-amber-50 border-amber-300 text-amber-800'
+                                      : 'bg-slate-100 border-slate-300 text-slate-700'
+                                  }`}
+                                >
+                                  <option value="Active">Active Intake</option>
+                                  <option value="Upcoming">Upcoming Intake</option>
+                                  <option value="Closed">Closed</option>
+                                </select>
+                                <button
+                                  onClick={() => {
+                                    if (
+                                      window.confirm(
+                                        `Remove programme "${so.program_name}" (${so.reference_code}) from ${so.institution_name}?`
+                                      )
+                                    ) {
+                                      dispatchAction('DELETE_STUDY_OPPORTUNITY', {
+                                        study_opportunity_id: so.id,
+                                      });
+                                    }
+                                  }}
+                                  className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50 transition"
+                                  title="Delete Programme Offer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                        <p className="text-[11px] text-slate-500">
-                          <strong>Academic:</strong> {so.entry_requirements} •{' '}
-                          <strong>English:</strong> {so.english_requirement} •{' '}
-                          <strong>Funds/Visa:</strong> {so.financial_requirement || so.visa_requirement}
-                        </p>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <select
-                          value={so.status || 'Active'}
-                          onChange={(e) =>
-                            dispatchAction('TOGGLE_STUDY_OPPORTUNITY_STATUS', {
-                              study_opportunity_id: so.id,
-                              status: e.target.value,
-                            })
-                          }
-                          className={`rounded-lg border px-2.5 py-1.5 text-xs font-bold ${
-                            so.status === 'Active'
-                              ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
-                              : so.status === 'Upcoming'
-                              ? 'bg-amber-50 border-amber-300 text-amber-800'
-                              : 'bg-slate-100 border-slate-300 text-slate-700'
-                          }`}
-                        >
-                          <option value="Active">Active Intake</option>
-                          <option value="Upcoming">Upcoming Intake</option>
-                          <option value="Closed">Closed</option>
-                        </select>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 

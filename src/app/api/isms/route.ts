@@ -18,6 +18,7 @@ import {
   createOrUpdateVisaCase,
   createStudyOpportunity,
   toggleStudyOpportunityStatus,
+  deleteStudyOpportunity,
   createStudyApplication,
   updateStudyApplicationStatus,
   createFlightBooking,
@@ -133,6 +134,9 @@ export async function POST(req: NextRequest) {
         break;
       case 'TOGGLE_STUDY_OPPORTUNITY_STATUS':
         result = await toggleStudyOpportunityStatus(actor, payload);
+        break;
+      case 'DELETE_STUDY_OPPORTUNITY':
+        result = await deleteStudyOpportunity(actor, payload);
         break;
       case 'CREATE_STUDY_APPLICATION':
         result = await createStudyApplication(actor, payload);

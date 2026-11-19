@@ -1257,6 +1257,39 @@ export async function createStudyOpportunity(
     [input.country.trim().toLowerCase().replace(/\s+/g, '-'), input.country.trim()]
   );
 
+  // Ensure the University / School is registered in partners_employers (One School -> Many Programmes)
+  const existingSchoolPartner = await db.query<any>(
+    'SELECT id FROM partners_employers WHERE LOWER(organization_name) = LOWER($1) LIMIT 1',
+    [input.institution_name.trim()]
+  );
+  if (!existingSchoolPartner.rows.length) {
+    const existingPartners = await db.query<any>('SELECT reference_code FROM partners_employers');
+    let maxPtr = 9;
+    for (const p of existingPartners.rows) {
+      const m = (p.reference_code || '').match(/PTR-(\d+)/);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (n > maxPtr) maxPtr = n;
+      }
+    }
+    const ptrCode = `PTR-${String(maxPtr + 1).padStart(3, '0')}`;
+    await db.query(
+      `INSERT INTO partners_employers (
+        id, reference_code, legacy_id, organization_name, partner_type, country, city, industry,
+        verification_status, agreement_status, status, notes
+      ) VALUES ($1,$2,$3,$4,'UNIVERSITY/COLLEGE',$5,$6,'Higher Education','Verified','Signed','Active',$7)`,
+      [
+        ptrCode,
+        ptrCode,
+        ptrCode,
+        input.institution_name.trim(),
+        input.country.trim(),
+        input.city?.trim() || null,
+        `Partner ${input.institution_type || 'University'} offering study abroad programmes`,
+      ]
+    );
+  }
+
   // Determine next STU reference code
   const existing = await db.query<any>('SELECT reference_code FROM study_opportunities');
   let maxNum = 1;
@@ -1343,6 +1376,39 @@ export async function toggleStudyOpportunityStatus(
   );
 
   return { id: payload.study_opportunity_id, status: payload.status };
+}
+
+export async function deleteStudyOpportunity(
+  actor: AuthenticatedActor,
+  payload: { study_opportunity_id: string }
+) {
+  assertPermission(actor, 'MANAGE_STUDY_ABROAD');
+  const db = await getDb();
+
+  const apps = await db.query<any>(
+    'SELECT id FROM study_applications WHERE study_opportunity_id = $1 LIMIT 1',
+    [payload.study_opportunity_id]
+  );
+  if (apps.rows.length > 0) {
+    throw new Error(
+      'Cannot delete a programme offer that already has active student applications. Set its status to Closed instead.'
+    );
+  }
+
+  const deleted = await db.query<any>(
+    'DELETE FROM study_opportunities WHERE id = $1 RETURNING *',
+    [payload.study_opportunity_id]
+  );
+
+  await writeAuditLog(
+    actor,
+    'STUDY_OPPORTUNITY_DELETED',
+    'STUDY_OPPORTUNITY',
+    payload.study_opportunity_id,
+    `Deleted study programme offer ${payload.study_opportunity_id} (${deleted.rows[0]?.institution_name} — ${deleted.rows[0]?.program_name})`
+  );
+
+  return { deleted_id: payload.study_opportunity_id };
 }
 
 export async function createStudyApplication(
