@@ -1214,6 +1214,137 @@ export async function createOrUpdateVisaCase(
   return { visa_case_id: visaId, status: input.visa_status };
 }
 
+export async function createStudyOpportunity(
+  actor: AuthenticatedActor,
+  input: {
+    institution_name: string;
+    institution_type?: string;
+    country: string;
+    city?: string;
+    program_name: string;
+    field_of_study: string;
+    qualification_level: string;
+    duration?: string;
+    tuition_fee?: number;
+    currency?: string;
+    application_fee?: number;
+    intake_period?: string;
+    application_deadline?: string;
+    scholarship_available?: boolean;
+    scholarship_details?: string;
+    accommodation_available?: boolean;
+    entry_requirements?: string;
+    english_requirement?: string;
+    financial_requirement?: string;
+    visa_requirement?: string;
+    institution_website?: string;
+    contact_person?: string;
+    status?: 'Active' | 'Closed' | 'Upcoming';
+    notes?: string;
+  }
+) {
+  assertPermission(actor, 'MANAGE_STUDY_ABROAD');
+  const db = await getDb();
+
+  if (!input.institution_name?.trim() || !input.program_name?.trim() || !input.country?.trim()) {
+    throw new Error('Institution Name, Programme Name, and Country are required.');
+  }
+
+  // Ensure destination country is registered
+  await db.query(
+    `INSERT INTO countries (id, name, region_continent, active_status)
+     VALUES ($1, $2, 'International', 'Yes') ON CONFLICT (name) DO NOTHING`,
+    [input.country.trim().toLowerCase().replace(/\s+/g, '-'), input.country.trim()]
+  );
+
+  // Determine next STU reference code
+  const existing = await db.query<any>('SELECT reference_code FROM study_opportunities');
+  let maxNum = 1;
+  for (const row of existing.rows) {
+    const m = (row.reference_code || '').match(/STU-(\d+)/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > maxNum) maxNum = n;
+    }
+  }
+  const stuCode = `STU-${String(maxNum + 1).padStart(6, '0')}`;
+
+  await db.query(
+    `INSERT INTO study_opportunities (
+      id, reference_code, legacy_id, country, city, institution_name, institution_type,
+      program_name, field_of_study, qualification_level, duration,
+      tuition_fee, currency, application_fee, intake_period, application_deadline,
+      scholarship_available, scholarship_details, accommodation_available,
+      entry_requirements, english_requirement, financial_requirement, visa_requirement,
+      institution_website, contact_person, status, notes
+    ) VALUES (
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27
+    )`,
+    [
+      stuCode,
+      stuCode,
+      stuCode,
+      input.country.trim(),
+      input.city?.trim() || null,
+      input.institution_name.trim(),
+      input.institution_type?.trim() || 'University',
+      input.program_name.trim(),
+      input.field_of_study?.trim() || 'General Studies',
+      input.qualification_level?.trim() || "Bachelor's Degree",
+      input.duration?.trim() || '3-4 Years',
+      Number(input.tuition_fee || 0),
+      (input.currency || 'EUR').toUpperCase(),
+      Number(input.application_fee || 0),
+      input.intake_period?.trim() || 'September / Fall',
+      input.application_deadline || null,
+      Boolean(input.scholarship_available),
+      input.scholarship_details?.trim() || null,
+      Boolean(input.accommodation_available),
+      input.entry_requirements?.trim() || 'SHS/WASSCE Credit C6+ or Bachelor Degree',
+      input.english_requirement?.trim() || 'MOI Letter Accepted / IELTS 6.0+',
+      input.financial_requirement?.trim() || 'Proof of Funds / Sponsor Bank Statement',
+      input.visa_requirement?.trim() || 'Student National Visa',
+      input.institution_website?.trim() || null,
+      input.contact_person?.trim() || actor.full_name,
+      input.status || 'Active',
+      input.notes?.trim() || null,
+    ]
+  );
+
+  await writeAuditLog(
+    actor,
+    'STUDY_OPPORTUNITY_CREATED',
+    'STUDY_OPPORTUNITY',
+    stuCode,
+    `Added partner school offer ${stuCode}: ${input.institution_name.trim()} — ${input.program_name.trim()} (${input.country.trim()})`
+  );
+
+  return { id: stuCode, reference_code: stuCode };
+}
+
+export async function toggleStudyOpportunityStatus(
+  actor: AuthenticatedActor,
+  payload: { study_opportunity_id: string; status: 'Active' | 'Upcoming' | 'Closed' }
+) {
+  assertPermission(actor, 'MANAGE_STUDY_ABROAD');
+  const db = await getDb();
+
+  await db.query(
+    `UPDATE study_opportunities SET status = $1, updated_at = NOW() WHERE id = $2`,
+    [payload.status, payload.study_opportunity_id]
+  );
+
+  await writeAuditLog(
+    actor,
+    'STUDY_OPPORTUNITY_STATUS_CHANGED',
+    'STUDY_OPPORTUNITY',
+    payload.study_opportunity_id,
+    `Changed study programme offer ${payload.study_opportunity_id} status to ${payload.status}`
+  );
+
+  return { id: payload.study_opportunity_id, status: payload.status };
+}
+
 export async function createStudyApplication(
   actor: AuthenticatedActor,
   input: {
@@ -1221,12 +1352,60 @@ export async function createStudyApplication(
     service_case_id?: string;
     study_opportunity_id: string;
     submission_status?: 'DRAFT' | 'SUBMITTED' | 'UNDER_REVIEW' | 'ADMITTED' | 'CONDITIONAL_OFFER' | 'REJECTED' | 'WITHDRAWN';
+    advisory_fee_ghs?: number;
     notes?: string;
   }
 ) {
   assertPermission(actor, 'MANAGE_STUDY_ABROAD');
   const db = await getDb();
-  const appCode = await nextReferenceCode(db, 'seq_study_ref', 'STDAPP', 6);
+
+  if (!input.client_id || !input.study_opportunity_id) {
+    throw new Error('Please select both a Student (Client) and a Partner School Programme.');
+  }
+
+  const oppRes = await db.query<any>(
+    'SELECT * FROM study_opportunities WHERE id = $1 LIMIT 1',
+    [input.study_opportunity_id]
+  );
+  const opp = oppRes.rows[0];
+  if (!opp) {
+    throw new Error(`Study programme '${input.study_opportunity_id}' not found.`);
+  }
+
+  // Ensure student has a linked STUDY ABROAD service case
+  let caseId = input.service_case_id;
+  if (!caseId) {
+    const existingCase = await db.query<any>(
+      "SELECT id FROM service_cases WHERE client_id = $1 AND service_type = 'STUDY ABROAD' ORDER BY created_at DESC LIMIT 1",
+      [input.client_id]
+    );
+    if (existingCase.rows.length > 0) {
+      caseId = existingCase.rows[0].id;
+    } else {
+      const feeGhs = Number(input.advisory_fee_ghs ?? 1500);
+      const createdCase = await createServiceCase(actor, {
+        client_id: input.client_id,
+        service_type: 'STUDY ABROAD',
+        country: opp.country,
+        destination_summary: `${opp.institution_name} — ${opp.program_name}`,
+        quoted_amount_ghs: feeGhs,
+        notes: `Study Abroad application for ${opp.institution_name} (${opp.qualification_level})`,
+      });
+      caseId = createdCase.id;
+    }
+  }
+
+  // Generate unique STDAPP reference code
+  const existingApps = await db.query<any>('SELECT reference_code FROM study_applications');
+  let maxAppNum = 0;
+  for (const r of existingApps.rows) {
+    const m = (r.reference_code || '').match(/STDAPP-(\d+)/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > maxAppNum) maxAppNum = n;
+    }
+  }
+  const appCode = `STDAPP-${String(maxAppNum + 1).padStart(6, '0')}`;
 
   await db.query(
     `INSERT INTO study_applications (
@@ -1237,18 +1416,18 @@ export async function createStudyApplication(
       appCode,
       appCode,
       input.client_id,
-      input.service_case_id || null,
+      caseId || null,
       input.study_opportunity_id,
       input.submission_status || 'SUBMITTED',
       actor.full_name,
-      input.notes || null,
+      input.notes?.trim() || null,
     ]
   );
 
-  if (input.service_case_id) {
+  if (caseId) {
     await db.query(
       `UPDATE service_cases SET workflow_stage = 'APPLICATION', case_status = 'IN PROGRESS', updated_at = NOW() WHERE id = $1`,
-      [input.service_case_id]
+      [caseId]
     );
   }
 
@@ -1257,10 +1436,10 @@ export async function createStudyApplication(
     'STUDY_APPLICATION_CREATED',
     'STUDY_APPLICATION',
     appCode,
-    `Created study application ${appCode} for client ${input.client_id} (${input.study_opportunity_id})`
+    `Created study application ${appCode} for student ${input.client_id} to ${opp.institution_name} (${opp.program_name})`
   );
 
-  return { id: appCode, reference_code: appCode };
+  return { id: appCode, reference_code: appCode, service_case_id: caseId };
 }
 
 export async function updateStudyApplicationStatus(
@@ -1269,19 +1448,35 @@ export async function updateStudyApplicationStatus(
     application_id: string;
     submission_status: 'DRAFT' | 'SUBMITTED' | 'UNDER_REVIEW' | 'ADMITTED' | 'CONDITIONAL_OFFER' | 'REJECTED' | 'WITHDRAWN';
     offer_accepted?: boolean;
+    tuition_deposit_paid?: boolean;
     notes?: string;
+    file_name?: string;
+    file_mime_type?: string;
+    file_size_bytes?: number;
+    file_data_url?: string;
   }
 ) {
   assertPermission(actor, 'MANAGE_STUDY_ABROAD');
   const db = await getDb();
 
-  const appRes = await db.query<any>('SELECT * FROM study_applications WHERE id = $1 LIMIT 1', [input.application_id]);
+  const appRes = await db.query<any>(
+    `SELECT sa.*, so.institution_name, so.program_name, so.country, so.visa_requirement
+     FROM study_applications sa
+     JOIN study_opportunities so ON so.id = sa.study_opportunity_id
+     WHERE sa.id = $1 LIMIT 1`,
+    [input.application_id]
+  );
   if (!appRes.rows[0]) throw new Error(`Study application ${input.application_id} not found.`);
   const app = appRes.rows[0];
 
+  const offerAccepted = input.offer_accepted ?? app.offer_accepted;
+  const depositPaid = input.tuition_deposit_paid ?? app.tuition_deposit_paid;
+
   const newStage =
-    input.offer_accepted
+    offerAccepted && depositPaid
       ? 'VISA_PREPARATION'
+      : offerAccepted
+      ? 'OFFER_ACCEPTED'
       : input.submission_status === 'ADMITTED' || input.submission_status === 'CONDITIONAL_OFFER'
       ? 'ADMISSION_DECISION'
       : 'APPLICATION';
@@ -1290,11 +1485,19 @@ export async function updateStudyApplicationStatus(
     `UPDATE study_applications
      SET submission_status = $1,
          offer_accepted = COALESCE($2, offer_accepted),
-         workflow_stage = $3,
-         notes = COALESCE($4, notes),
+         tuition_deposit_paid = COALESCE($3, tuition_deposit_paid),
+         workflow_stage = $4,
+         notes = COALESCE($5, notes),
          updated_at = NOW()
-     WHERE id = $5`,
-    [input.submission_status, input.offer_accepted ?? null, newStage, input.notes || null, app.id]
+     WHERE id = $6`,
+    [
+      input.submission_status,
+      input.offer_accepted ?? null,
+      input.tuition_deposit_paid ?? null,
+      newStage,
+      input.notes || null,
+      app.id,
+    ]
   );
 
   if (app.service_case_id) {
@@ -1304,12 +1507,84 @@ export async function updateStudyApplicationStatus(
     );
   }
 
+  // If an Offer Letter / CAS / LOA scan was attached, store it in client_documents vault
+  if (input.file_data_url && input.file_name) {
+    await verifyAndUpdateDocument(actor, {
+      client_id: app.client_id,
+      service_case_id: app.service_case_id || undefined,
+      document_type: 'Offer Letter',
+      document_number: app.reference_code,
+      verified: true,
+      notes: `${input.submission_status} Offer Letter from ${app.institution_name} (${app.program_name})`,
+      file_name: input.file_name,
+      file_mime_type: input.file_mime_type,
+      file_size_bytes: input.file_size_bytes,
+      file_data_url: input.file_data_url,
+    });
+  }
+
+  // When Offer is Accepted and Tuition Deposit is Paid (or Admitted + Offer Accepted), auto-trigger Student Visa Case & Task!
+  if (offerAccepted && (depositPaid || input.submission_status === 'ADMITTED')) {
+    await emitWorkflowEvent(
+      actor,
+      `STUDY_OFFER_FINALIZED:${app.id}`,
+      'STUDY_OFFER_FINALIZED',
+      'STUDY_APPLICATION',
+      app.id,
+      async () => {
+        // Check if visa case already exists for this study case
+        const existingVisa = await db.query<any>(
+          'SELECT id FROM visa_cases WHERE client_id = $1 AND destination_country = $2 LIMIT 1',
+          [app.client_id, app.country]
+        );
+        const actions: string[] = [];
+        if (!existingVisa.rows.length) {
+          const visaId = await nextReferenceCode(db, 'seq_visa_ref', 'VISA', 6);
+          await db.query(
+            `INSERT INTO visa_cases (
+              id, reference_code, client_id, service_case_id, visa_type, destination_country, visa_category,
+              application_date, visa_status, next_action, assigned_officer, notes
+            ) VALUES ($1,$2,$3,$4,'STUDENT VISA',$5,$6,CURRENT_DATE,'DOCUMENTS REQUIRED',$7,$8,$9)`,
+            [
+              visaId,
+              visaId,
+              app.client_id,
+              app.service_case_id || null,
+              app.country,
+              app.visa_requirement || 'Student National Visa',
+              `Compile CAS/LOA & financial proof for ${app.institution_name} Student Visa`,
+              actor.full_name,
+              `Auto-opened from Study Application ${app.reference_code} (${app.institution_name})`,
+            ]
+          );
+          actions.push(`Opened Student Visa Case ${visaId} for ${app.country}`);
+        }
+        const taskCode = await nextReferenceCode(db, 'seq_task_ref', 'TASK', 6);
+        await db.query(
+          `INSERT INTO tasks (id, reference_code, client_id, service_case_id, title, assigned_staff_name, priority, due_date, status, automation_source_event)
+           VALUES ($1,$2,$3,$4,$5,$6,'HIGH',$7,'NOT STARTED','STUDY_OFFER_FINALIZED')`,
+          [
+            taskCode,
+            taskCode,
+            app.client_id,
+            app.service_case_id || null,
+            `Prepare Student Visa submission for ${app.institution_name} (${app.country}) — ${app.reference_code}`,
+            actor.full_name,
+            new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10),
+          ]
+        );
+        actions.push(`Created Student Visa preparation task ${taskCode}`);
+        return actions;
+      }
+    );
+  }
+
   await writeAuditLog(
     actor,
     'STUDY_APPLICATION_UPDATED',
     'STUDY_APPLICATION',
     app.reference_code,
-    `Updated study application ${app.reference_code} to ${input.submission_status} (Stage: ${newStage})`
+    `Updated study application ${app.reference_code} (${app.institution_name}) to ${input.submission_status} (Stage: ${newStage})`
   );
 
   return { id: app.id, submission_status: input.submission_status, workflow_stage: newStage };
@@ -1951,7 +2226,10 @@ export async function getSystemState(staffId = 'STF-01') {
     `),
     db.query<any>('SELECT * FROM study_opportunities ORDER BY reference_code ASC'),
     db.query<any>(`
-      SELECT sa.*, c.full_name AS student_name, so.institution_name, so.program_name, so.country
+      SELECT sa.*, c.full_name AS student_name, c.phone AS student_phone,
+             so.institution_name, so.program_name, so.country, so.city,
+             so.qualification_level, so.tuition_fee, so.currency,
+             so.intake_period, so.scholarship_available, so.scholarship_details
       FROM study_applications sa
       JOIN clients c ON c.id = sa.client_id
       JOIN study_opportunities so ON so.id = sa.study_opportunity_id

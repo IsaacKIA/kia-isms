@@ -16,6 +16,8 @@ import {
   recordInterviewOutcome,
   verifyAndUpdateDocument,
   createOrUpdateVisaCase,
+  createStudyOpportunity,
+  toggleStudyOpportunityStatus,
   createStudyApplication,
   updateStudyApplicationStatus,
   createFlightBooking,
@@ -125,6 +127,12 @@ export async function POST(req: NextRequest) {
         break;
       case 'UPDATE_VISA_CASE':
         result = await createOrUpdateVisaCase(actor, payload);
+        break;
+      case 'CREATE_STUDY_OPPORTUNITY':
+        result = await createStudyOpportunity(actor, payload);
+        break;
+      case 'TOGGLE_STUDY_OPPORTUNITY_STATUS':
+        result = await toggleStudyOpportunityStatus(actor, payload);
         break;
       case 'CREATE_STUDY_APPLICATION':
         result = await createStudyApplication(actor, payload);
