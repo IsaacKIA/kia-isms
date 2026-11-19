@@ -3,8 +3,13 @@ import {
   getSystemState,
   getStaffActor,
   registerClient,
+  updateClient,
   createServiceCase,
   updateServiceCaseStage,
+  createEmployerPartner,
+  createJobOpportunity,
+  updateJobOpportunity,
+  toggleJobOpportunityStatus,
   createJobMatch,
   overrideMatchEligibility,
   scheduleInterview,
@@ -15,7 +20,9 @@ import {
   updateStudyApplicationStatus,
   createFlightBooking,
   createInvoice,
+  voidInvoice,
   recordPayment,
+  reversePayment,
   reconcilePayment,
   recordOperatingExpense,
   logCommunication,
@@ -27,11 +34,32 @@ import {
   clearDemoData,
 } from '@/lib/services/isms-service';
 import { runWorkbookMigrationAnalysis } from '@/lib/migration/excel-migrator';
+import { SESSION_COOKIE_NAME, verifySessionToken } from '@/lib/auth/session';
+
+async function resolveAuthenticatedStaffId(req: NextRequest, requestedStaffId?: string): Promise<string | null> {
+  const token = req.cookies.get(SESSION_COOKIE_NAME)?.value;
+  const session = verifySessionToken(token);
+  if (!session) return null;
+  const sessionActor = await getStaffActor(session.staffId);
+  const canPreviewRoles =
+    sessionActor.roles.includes('FOUNDER_CEO') || sessionActor.roles.includes('ADMINISTRATOR');
+  if (canPreviewRoles && requestedStaffId) {
+    return requestedStaffId;
+  }
+  return sessionActor.id;
+}
 
 export async function GET(req: NextRequest) {
   try {
-    const staffId = req.nextUrl.searchParams.get('staffId') || 'STF-01';
-    const state = await getSystemState(staffId);
+    const requestedStaffId = req.nextUrl.searchParams.get('staffId') || undefined;
+    const effectiveStaffId = await resolveAuthenticatedStaffId(req, requestedStaffId);
+    if (!effectiveStaffId) {
+      return NextResponse.json(
+        { ok: false, unauthenticated: true, error: 'Authentication required. Please sign in.' },
+        { status: 401 }
+      );
+    }
+    const state = await getSystemState(effectiveStaffId);
     return NextResponse.json({ ok: true, data: state });
   } catch (err: any) {
     return NextResponse.json(
@@ -44,19 +72,41 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { action, staffId = 'STF-01', payload = {} } = body;
-    const actor = await getStaffActor(staffId);
+    const { action, staffId, payload = {} } = body;
+    const effectiveStaffId = await resolveAuthenticatedStaffId(req, staffId);
+    if (!effectiveStaffId) {
+      return NextResponse.json(
+        { ok: false, unauthenticated: true, error: 'Authentication required. Please sign in.' },
+        { status: 401 }
+      );
+    }
+    const actor = await getStaffActor(effectiveStaffId);
 
     let result: any;
     switch (action) {
       case 'REGISTER_CLIENT':
         result = await registerClient(actor, payload);
         break;
+      case 'UPDATE_CLIENT':
+        result = await updateClient(actor, payload);
+        break;
       case 'CREATE_SERVICE_CASE':
         result = await createServiceCase(actor, payload);
         break;
       case 'UPDATE_CASE_STAGE':
         result = await updateServiceCaseStage(actor, payload);
+        break;
+      case 'CREATE_EMPLOYER':
+        result = await createEmployerPartner(actor, payload);
+        break;
+      case 'CREATE_JOB_OPPORTUNITY':
+        result = await createJobOpportunity(actor, payload);
+        break;
+      case 'UPDATE_JOB_OPPORTUNITY':
+        result = await updateJobOpportunity(actor, payload);
+        break;
+      case 'TOGGLE_JOB_STATUS':
+        result = await toggleJobOpportunityStatus(actor, payload);
         break;
       case 'CREATE_JOB_MATCH':
         result = await createJobMatch(actor, payload);
@@ -88,8 +138,14 @@ export async function POST(req: NextRequest) {
       case 'CREATE_INVOICE':
         result = await createInvoice(actor, payload);
         break;
+      case 'VOID_INVOICE':
+        result = await voidInvoice(actor, payload);
+        break;
       case 'RECORD_PAYMENT':
         result = await recordPayment(actor, payload);
+        break;
+      case 'REVERSE_PAYMENT':
+        result = await reversePayment(actor, payload);
         break;
       case 'RECONCILE_PAYMENT':
         result = await reconcilePayment(actor, payload.payment_id);
@@ -125,7 +181,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: `Unknown action: ${action}` }, { status: 400 });
     }
 
-    const updatedState = await getSystemState(staffId);
+    const updatedState = await getSystemState(effectiveStaffId);
     return NextResponse.json({ ok: true, result, data: updatedState });
   } catch (err: any) {
     const isDenied = err?.message?.includes('Access Denied');

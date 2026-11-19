@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS staff_users (
   email TEXT NOT NULL UNIQUE,
   branch TEXT NOT NULL DEFAULT 'Ajumako Head Office',
   status TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active', 'Inactive')),
+  password_hash TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -355,6 +356,10 @@ CREATE TABLE IF NOT EXISTS client_documents (
   verification_date DATE,
   verified_by TEXT,
   file_reference TEXT,
+  file_name TEXT,
+  file_mime_type TEXT,
+  file_size_bytes INTEGER,
+  file_data_url TEXT,
   is_mandatory BOOLEAN NOT NULL DEFAULT TRUE,
   notes TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

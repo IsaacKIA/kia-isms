@@ -11,6 +11,7 @@ import {
   evaluateCandidateMatch,
   getPassportStatus,
 } from '../matching/engine';
+import { hashPassword, DEFAULT_STAFF_PASSWORD } from '../auth/session';
 
 export async function getStaffActor(staffId = 'STF-01'): Promise<AuthenticatedActor> {
   const db = await getDb();
@@ -969,6 +970,10 @@ export async function verifyAndUpdateDocument(
     expiry_date?: string;
     verified: boolean;
     notes?: string;
+    file_name?: string;
+    file_mime_type?: string;
+    file_size_bytes?: number;
+    file_data_url?: string;
   }
 ) {
   assertPermission(actor, 'MANAGE_VISA_DOCUMENTS');
@@ -996,8 +1001,12 @@ export async function verifyAndUpdateDocument(
            verification_date = CASE WHEN $4 = TRUE THEN CURRENT_DATE ELSE verification_date END,
            verified_by = $5,
            notes = COALESCE($6, notes),
+           file_name = COALESCE($7, file_name),
+           file_mime_type = COALESCE($8, file_mime_type),
+           file_size_bytes = COALESCE($9, file_size_bytes),
+           file_data_url = COALESCE($10, file_data_url),
            updated_at = NOW()
-       WHERE id = $7`,
+       WHERE id = $11`,
       [
         input.document_number || null,
         input.issue_date || null,
@@ -1005,6 +1014,10 @@ export async function verifyAndUpdateDocument(
         input.verified,
         actor.full_name,
         input.notes || null,
+        input.file_name || null,
+        input.file_mime_type || null,
+        input.file_size_bytes ?? null,
+        input.file_data_url || null,
         docId,
       ]
     );
@@ -1013,8 +1026,9 @@ export async function verifyAndUpdateDocument(
     await db.query(
       `INSERT INTO client_documents (
         id, reference_code, client_id, service_case_id, document_type, document_number,
-        issue_date, expiry_date, is_missing, verified, verification_date, verified_by, file_reference, notes
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,FALSE,$9,$10,$11,$12,$13)`,
+        issue_date, expiry_date, is_missing, verified, verification_date, verified_by, file_reference, notes,
+        file_name, file_mime_type, file_size_bytes, file_data_url
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,FALSE,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
       [
         docId,
         docId,
@@ -1027,8 +1041,12 @@ export async function verifyAndUpdateDocument(
         input.verified,
         input.verified ? today : null,
         actor.full_name,
-        `Candidates/${input.client_id}`,
+        input.file_name || `Candidates/${input.client_id}`,
         input.notes || null,
+        input.file_name || null,
+        input.file_mime_type || null,
+        input.file_size_bytes ?? null,
+        input.file_data_url || null,
       ]
     );
   }
@@ -2098,7 +2116,7 @@ export async function getSystemState(staffId = 'STF-01') {
 
   return {
     actor,
-    staff: staffRes.rows,
+    staff: staffRes.rows.map(({ password_hash, ...rest }) => rest),
     clients,
     serviceCases,
     jobOpportunities: jobsRes.rows,
@@ -2188,6 +2206,7 @@ export async function createStaffMember(
     phone?: string;
     email: string;
     branch?: string;
+    password?: string;
   }
 ) {
   assertPermission(actor, 'MANAGE_ADMIN_SETTINGS');
@@ -2197,6 +2216,7 @@ export async function createStaffMember(
   const primaryRole = payload.primary_role;
   const phone = (payload.phone || '').trim();
   const branch = (payload.branch || '').trim() || 'Ajumako Head Office';
+  const rawPassword = (payload.password || '').trim() || DEFAULT_STAFF_PASSWORD;
 
   if (!fullName) throw new Error('Full Name is required.');
   if (!email) throw new Error('Email is required.');
@@ -2228,10 +2248,12 @@ export async function createStaffMember(
     assignedRoles.unshift(primaryRole);
   }
 
+  const pwdHash = hashPassword(rawPassword);
+
   const res = await db.query<any>(
-    `INSERT INTO staff_users (id, reference_code, legacy_id, full_name, primary_role, roles_json, phone, email, branch, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'Active')
-     RETURNING *`,
+    `INSERT INTO staff_users (id, reference_code, legacy_id, full_name, primary_role, roles_json, phone, email, branch, status, password_hash)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'Active', $10)
+     RETURNING id, reference_code, legacy_id, full_name, primary_role, roles_json, phone, email, branch, status, created_at`,
     [
       refCode,
       refCode,
@@ -2242,6 +2264,7 @@ export async function createStaffMember(
       phone,
       email,
       branch,
+      pwdHash,
     ]
   );
 
@@ -2364,4 +2387,641 @@ export async function clearDemoData(actor: AuthenticatedActor) {
     preserved_job_opportunities: Number(jobsCount.rows[0]?.count || 0),
     preserved_employers: Number(partnersCount.rows[0]?.count || 0),
   };
+}
+
+// ============================================================================
+// 10. CLIENT PROFILE EDITING, EMPLOYER & JOB CRUD, & FINANCE REVERSALS
+// ============================================================================
+export async function updateClient(
+  actor: AuthenticatedActor,
+  input: {
+    client_id: string;
+    first_name: string;
+    middle_name?: string;
+    last_name: string;
+    gender: string;
+    date_of_birth?: string;
+    phone: string;
+    email?: string;
+    residential_address?: string;
+    region?: string;
+    city_town?: string;
+    passport_available: boolean;
+    passport_number?: string;
+    passport_issue_date?: string;
+    passport_expiry_date?: string;
+    education_level?: string;
+    profession?: string;
+    years_of_experience?: number;
+    skills?: string;
+    driving_license: boolean;
+    license_class?: string;
+    preferred_countries?: string;
+    preferred_sectors?: string;
+    preferred_service?: string;
+    emergency_contact?: string;
+    client_status?: string;
+    notes?: string;
+  }
+) {
+  assertPermission(actor, 'MANAGE_CLIENTS');
+  const db = await getDb();
+
+  const existing = await db.query<any>('SELECT * FROM clients WHERE id = $1 LIMIT 1', [input.client_id]);
+  if (!existing.rows.length) {
+    throw new Error(`Client '${input.client_id}' not found.`);
+  }
+
+  const fullName = [input.first_name, input.middle_name, input.last_name]
+    .filter(Boolean)
+    .map((s) => s!.trim())
+    .join(' ');
+  const normalizedPhone = normalizePhone(input.phone);
+
+  await db.query(
+    `UPDATE clients
+     SET first_name = $1,
+         middle_name = $2,
+         last_name = $3,
+         full_name = $4,
+         gender = $5,
+         date_of_birth = $6,
+         phone = $7,
+         phone_normalized = $8,
+         email = $9,
+         residential_address = $10,
+         region = $11,
+         city_town = $12,
+         passport_available = $13,
+         passport_number = $14,
+         passport_issue_date = $15,
+         passport_expiry_date = $16,
+         education_level = $17,
+         profession = $18,
+         years_of_experience = $19,
+         skills = $20,
+         driving_license = $21,
+         license_class = $22,
+         preferred_countries = $23,
+         preferred_sectors = $24,
+         preferred_service = $25,
+         emergency_contact = $26,
+         client_status = COALESCE($27, client_status),
+         notes = $28,
+         updated_at = NOW()
+     WHERE id = $29`,
+    [
+      input.first_name.trim(),
+      input.middle_name?.trim() || null,
+      input.last_name.trim(),
+      fullName,
+      input.gender,
+      input.date_of_birth || null,
+      input.phone.trim(),
+      normalizedPhone,
+      input.email?.trim() || null,
+      input.residential_address?.trim() || null,
+      input.region?.trim() || null,
+      input.city_town?.trim() || null,
+      Boolean(input.passport_available),
+      input.passport_number?.trim().toUpperCase() || null,
+      input.passport_issue_date || null,
+      input.passport_expiry_date || null,
+      input.education_level || 'SHS/WASSCE',
+      input.profession?.trim() || null,
+      Number(input.years_of_experience || 0),
+      input.skills?.trim() || null,
+      Boolean(input.driving_license),
+      input.license_class?.trim() || null,
+      input.preferred_countries?.trim() || null,
+      input.preferred_sectors?.trim() || null,
+      input.preferred_service || 'WORK ABROAD',
+      input.emergency_contact?.trim() || null,
+      input.client_status || null,
+      input.notes?.trim() || null,
+      input.client_id,
+    ]
+  );
+
+  // Sync passport document record if passport info provided
+  if (input.passport_available && input.passport_number) {
+    const docRes = await db.query<any>(
+      "SELECT id FROM client_documents WHERE client_id = $1 AND LOWER(document_type) = 'passport' LIMIT 1",
+      [input.client_id]
+    );
+    if (docRes.rows.length) {
+      await db.query(
+        `UPDATE client_documents
+         SET document_number = $1,
+             issue_date = COALESCE($2, issue_date),
+             expiry_date = COALESCE($3, expiry_date),
+             is_missing = FALSE,
+             updated_at = NOW()
+         WHERE id = $4`,
+        [
+          input.passport_number.trim().toUpperCase(),
+          input.passport_issue_date || null,
+          input.passport_expiry_date || null,
+          docRes.rows[0].id,
+        ]
+      );
+    }
+  }
+
+  await writeAuditLog(
+    actor,
+    'CLIENT_UPDATED',
+    'CLIENT',
+    input.client_id,
+    `Updated master profile for ${fullName} (${input.client_id})`
+  );
+
+  return { client_id: input.client_id };
+}
+
+export async function createEmployerPartner(
+  actor: AuthenticatedActor,
+  input: {
+    organization_name: string;
+    partner_type: 'DIRECT EMPLOYER' | 'RECRUITMENT AGENCY' | 'UNIVERSITY/COLLEGE' | 'TRAVEL PARTNER';
+    country: string;
+    city?: string;
+    industry?: string;
+    contact_person?: string;
+    phone?: string;
+    email?: string;
+    verification_status?: 'Pending' | 'Verified' | 'Rejected';
+    agreement_status?: 'None' | 'Under Review' | 'Signed' | 'Expired';
+    notes?: string;
+  }
+) {
+  assertPermission(actor, 'MANAGE_WORK_ABROAD');
+  const db = await getDb();
+
+  if (!input.organization_name?.trim() || !input.country?.trim()) {
+    throw new Error('Organization Name and Country are required to register an Employer/Partner.');
+  }
+
+  // Ensure country is in countries table
+  await db.query(
+    `INSERT INTO countries (id, name, region_continent, active_status)
+     VALUES ($1, $2, 'International', 'Yes') ON CONFLICT (name) DO NOTHING`,
+    [input.country.trim().toLowerCase().replace(/\s+/g, '-'), input.country.trim()]
+  );
+
+  const existingPartners = await db.query<any>('SELECT reference_code FROM partners_employers');
+  let maxNum = 9;
+  for (const p of existingPartners.rows) {
+    const m = (p.reference_code || '').match(/PTR-(\d+)/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > maxNum) maxNum = n;
+    }
+  }
+  const refCode = `PTR-${String(maxNum + 1).padStart(3, '0')}`;
+
+  await db.query(
+    `INSERT INTO partners_employers (
+      id, reference_code, legacy_id, organization_name, partner_type, country, city, industry,
+      contact_person, phone, email, verification_status, agreement_status, status, notes
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'Active',$14)`,
+    [
+      refCode,
+      refCode,
+      refCode,
+      input.organization_name.trim(),
+      input.partner_type || 'DIRECT EMPLOYER',
+      input.country.trim(),
+      input.city?.trim() || null,
+      input.industry?.trim() || null,
+      input.contact_person?.trim() || null,
+      input.phone?.trim() || null,
+      input.email?.trim() || null,
+      input.verification_status || 'Verified',
+      input.agreement_status || 'Signed',
+      input.notes?.trim() || null,
+    ]
+  );
+
+  await writeAuditLog(
+    actor,
+    'PARTNER_CREATED',
+    'PARTNER',
+    refCode,
+    `Registered employer/partner ${input.organization_name.trim()} (${refCode}) in ${input.country.trim()}`
+  );
+
+  return { partner_id: refCode };
+}
+
+export async function createJobOpportunity(
+  actor: AuthenticatedActor,
+  input: {
+    partner_id?: string;
+    employer_name: string;
+    country: string;
+    city?: string;
+    job_title: string;
+    sector?: string;
+    role_description?: string;
+    gender_requirement?: 'Male' | 'Female' | 'Any';
+    min_age?: number;
+    max_age?: number;
+    education_required?: string;
+    experience_type?: 'Required' | 'Preferred' | 'None';
+    min_experience_years?: number;
+    license_required?: boolean;
+    license_type_required?: string;
+    pcc_required?: boolean;
+    salary_minimum: number;
+    salary_maximum?: number;
+    salary_currency: string;
+    food_provided?: boolean;
+    accommodation_provided?: boolean;
+    verification_status?: 'Pending' | 'Verified' | 'Rejected';
+    notes?: string;
+  }
+) {
+  assertPermission(actor, 'MANAGE_WORK_ABROAD');
+  const db = await getDb();
+
+  if (!input.job_title?.trim() || !input.employer_name?.trim() || !input.country?.trim()) {
+    throw new Error('Job Title, Employer Name, and Country are required.');
+  }
+
+  // Ensure country exists
+  await db.query(
+    `INSERT INTO countries (id, name, region_continent, active_status)
+     VALUES ($1, $2, 'International', 'Yes') ON CONFLICT (name) DO NOTHING`,
+    [input.country.trim().toLowerCase().replace(/\s+/g, '-'), input.country.trim()]
+  );
+
+  const existingJobs = await db.query<any>('SELECT reference_code FROM job_opportunities');
+  let maxNum = 12;
+  for (const j of existingJobs.rows) {
+    const m = (j.reference_code || '').match(/JOB-(\d+)/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > maxNum) maxNum = n;
+    }
+  }
+  const jobId = `JOB-${String(maxNum + 1).padStart(6, '0')}`;
+
+  const salMin = Number(input.salary_minimum || 0);
+  const salMax = Number(input.salary_maximum || salMin);
+
+  await db.query(
+    `INSERT INTO job_opportunities (
+      id, reference_code, legacy_id, country, city, partner_id, employer_name, partner_agency,
+      job_title, sector, role_description, gender_requirement, min_age, max_age,
+      education_required, experience_type, min_experience_years,
+      license_required, license_type_required, pcc_required,
+      salary_minimum, salary_maximum, salary_currency,
+      food_provided, accommodation_provided, verification_status, opportunity_status, notes
+    ) VALUES (
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,'Open',$27
+    )`,
+    [
+      jobId,
+      jobId,
+      jobId,
+      input.country.trim(),
+      input.city?.trim() || null,
+      input.partner_id || null,
+      input.employer_name.trim(),
+      input.employer_name.trim(),
+      input.job_title.trim(),
+      input.sector?.trim() || 'General',
+      input.role_description?.trim() || null,
+      input.gender_requirement || 'Any',
+      Number(input.min_age || 20),
+      Number(input.max_age || 45),
+      input.education_required || 'SHS/WASSCE',
+      input.experience_type || 'Preferred',
+      Number(input.min_experience_years || 0),
+      Boolean(input.license_required),
+      input.license_type_required?.trim() || null,
+      Boolean(input.pcc_required),
+      salMin,
+      salMax,
+      (input.salary_currency || 'AED').toUpperCase(),
+      Boolean(input.food_provided),
+      Boolean(input.accommodation_provided),
+      input.verification_status || 'Verified',
+      input.notes?.trim() || null,
+    ]
+  );
+
+  await writeAuditLog(
+    actor,
+    'JOB_CREATED',
+    'JOB_OPPORTUNITY',
+    jobId,
+    `Created job opportunity ${jobId}: ${input.job_title.trim()} at ${input.employer_name.trim()} (${input.country.trim()})`
+  );
+
+  return { job_id: jobId };
+}
+
+export async function updateJobOpportunity(
+  actor: AuthenticatedActor,
+  input: {
+    job_id: string;
+    job_title: string;
+    employer_name: string;
+    country: string;
+    city?: string;
+    sector?: string;
+    gender_requirement?: 'Male' | 'Female' | 'Any';
+    min_age?: number;
+    max_age?: number;
+    education_required?: string;
+    min_experience_years?: number;
+    license_required?: boolean;
+    license_type_required?: string;
+    salary_minimum: number;
+    salary_maximum?: number;
+    salary_currency: string;
+    opportunity_status?: 'Open' | 'Closed' | 'On Hold' | 'Expired';
+    verification_status?: 'Pending' | 'Verified' | 'Rejected';
+    notes?: string;
+  }
+) {
+  assertPermission(actor, 'MANAGE_WORK_ABROAD');
+  const db = await getDb();
+
+  await db.query(
+    `UPDATE job_opportunities
+     SET job_title = $1,
+         employer_name = $2,
+         country = $3,
+         city = $4,
+         sector = $5,
+         gender_requirement = $6,
+         min_age = $7,
+         max_age = $8,
+         education_required = $9,
+         min_experience_years = $10,
+         license_required = $11,
+         license_type_required = $12,
+         salary_minimum = $13,
+         salary_maximum = $14,
+         salary_currency = $15,
+         opportunity_status = COALESCE($16, opportunity_status),
+         verification_status = COALESCE($17, verification_status),
+         notes = $18,
+         updated_at = NOW()
+     WHERE id = $19`,
+    [
+      input.job_title.trim(),
+      input.employer_name.trim(),
+      input.country.trim(),
+      input.city?.trim() || null,
+      input.sector?.trim() || 'General',
+      input.gender_requirement || 'Any',
+      Number(input.min_age || 20),
+      Number(input.max_age || 45),
+      input.education_required || 'SHS/WASSCE',
+      Number(input.min_experience_years || 0),
+      Boolean(input.license_required),
+      input.license_type_required?.trim() || null,
+      Number(input.salary_minimum || 0),
+      Number(input.salary_maximum || input.salary_minimum || 0),
+      (input.salary_currency || 'AED').toUpperCase(),
+      input.opportunity_status || null,
+      input.verification_status || null,
+      input.notes?.trim() || null,
+      input.job_id,
+    ]
+  );
+
+  await writeAuditLog(
+    actor,
+    'JOB_UPDATED',
+    'JOB_OPPORTUNITY',
+    input.job_id,
+    `Updated job opportunity ${input.job_id} (${input.job_title})`
+  );
+
+  return { job_id: input.job_id };
+}
+
+export async function toggleJobOpportunityStatus(
+  actor: AuthenticatedActor,
+  payload: { job_id: string; opportunity_status: 'Open' | 'Closed' | 'On Hold' | 'Expired' }
+) {
+  assertPermission(actor, 'MANAGE_WORK_ABROAD');
+  const db = await getDb();
+
+  await db.query(
+    `UPDATE job_opportunities SET opportunity_status = $1, updated_at = NOW() WHERE id = $2`,
+    [payload.opportunity_status, payload.job_id]
+  );
+
+  await writeAuditLog(
+    actor,
+    'JOB_STATUS_CHANGED',
+    'JOB_OPPORTUNITY',
+    payload.job_id,
+    `Changed job opportunity ${payload.job_id} status to ${payload.opportunity_status}`
+  );
+
+  return { job_id: payload.job_id, opportunity_status: payload.opportunity_status };
+}
+
+export async function reversePayment(
+  actor: AuthenticatedActor,
+  payload: { payment_id: string; reason: string }
+) {
+  assertPermission(actor, 'APPROVE_FINANCE_REVERSAL');
+  const db = await getDb();
+
+  if (!payload.reason?.trim()) {
+    throw new Error('A documented audit reason is required to reverse a financial payment.');
+  }
+
+  const pRes = await db.query<any>('SELECT * FROM payments WHERE id = $1 LIMIT 1', [payload.payment_id]);
+  const payment = pRes.rows[0];
+  if (!payment) {
+    throw new Error(`Payment '${payload.payment_id}' not found.`);
+  }
+  if (payment.payment_status === 'REFUNDED' || payment.payment_status === 'FAILED') {
+    throw new Error(`Payment '${payload.payment_id}' has already been reversed/refunded.`);
+  }
+
+  // 1. Mark payment as REFUNDED and remove allocations
+  await db.query(
+    `UPDATE payments
+     SET payment_status = 'REFUNDED',
+         notes = COALESCE(notes || ' | ', '') || $1,
+         updated_at = NOW()
+     WHERE id = $2`,
+    [`REVERSED by ${actor.full_name}: ${payload.reason.trim()}`, payload.payment_id]
+  );
+  await db.query('DELETE FROM payment_allocations WHERE payment_id = $1', [payload.payment_id]);
+
+  // 2. Recalculate invoice status if linked
+  if (payment.invoice_id) {
+    const invRes = await db.query<any>('SELECT * FROM invoices WHERE id = $1 LIMIT 1', [payment.invoice_id]);
+    const inv = invRes.rows[0];
+    if (inv && inv.status !== 'VOID') {
+      const remRes = await db.query<{ paid: string }>(
+        `SELECT COALESCE(SUM(allocated_amount_ghs), 0) AS paid FROM payment_allocations WHERE invoice_id = $1`,
+        [inv.id]
+      );
+      const stillPaid = Number(remRes.rows[0]?.paid || 0);
+      const newStatus =
+        stillPaid >= Number(inv.total_amount_ghs)
+          ? 'PAID'
+          : stillPaid > 0
+          ? 'PARTIAL'
+          : 'ISSUED';
+      await db.query('UPDATE invoices SET status = $1, updated_at = NOW() WHERE id = $2', [
+        newStatus,
+        inv.id,
+      ]);
+    }
+  }
+
+  // 3. Post Reversing Double-Entry Journal Entry: Dr Accounts Receivable (1200), Cr Cash/Bank/MoMo (1110/1120/1130)
+  const assetAccountByMethod: Record<string, string> = {
+    Cash: '1110',
+    'Bank Transfer': '1120',
+    'Mobile Money': '1130',
+    Card: '1120',
+  };
+  const cashAccount = assetAccountByMethod[payment.payment_method] || '1110';
+  const jnlId = await nextReferenceCode(db, 'seq_journal_ref', 'JNL', 6);
+  const amountGhs = Number(payment.amount_ghs);
+
+  await db.query(
+    `INSERT INTO journal_entries (id, reference_code, entry_date, source_module, source_id, description, posted_by)
+     VALUES ($1,$2,CURRENT_DATE,'REVERSAL',$3,$4,$5)`,
+    [
+      jnlId,
+      jnlId,
+      payment.id,
+      `REVERSAL of Receipt ${payment.receipt_number} (${payment.id}): ${payload.reason.trim()}`,
+      actor.full_name,
+    ]
+  );
+
+  await db.query(
+    `INSERT INTO journal_lines (id, journal_entry_id, account_code, debit_ghs, credit_ghs, client_id, service_case_id, memo)
+     VALUES ($1,$2,'1200',$3,0,$4,$5,$6), ($7,$2,$8,0,$3,$4,$5,$6)`,
+    [
+      `${jnlId}-L1`,
+      jnlId,
+      amountGhs,
+      payment.client_id,
+      payment.service_case_id || null,
+      `Reversal of ${payment.receipt_number}: reinstate receivable`,
+      `${jnlId}-L2`,
+      cashAccount,
+    ]
+  );
+
+  await writeAuditLog(
+    actor,
+    'PAYMENT_REVERSED',
+    'PAYMENT',
+    payment.id,
+    `Reversed payment ${payment.id} (${payment.receipt_number}, GHS ${amountGhs}) via Journal ${jnlId}. Reason: ${payload.reason.trim()}`
+  );
+
+  return { payment_id: payment.id, journal_entry_id: jnlId };
+}
+
+export async function voidInvoice(
+  actor: AuthenticatedActor,
+  payload: { invoice_id: string; reason: string }
+) {
+  assertPermission(actor, 'APPROVE_FINANCE_REVERSAL');
+  const db = await getDb();
+
+  if (!payload.reason?.trim()) {
+    throw new Error('A documented audit reason is required to void an invoice.');
+  }
+
+  const invRes = await db.query<any>('SELECT * FROM invoices WHERE id = $1 LIMIT 1', [payload.invoice_id]);
+  const inv = invRes.rows[0];
+  if (!inv) {
+    throw new Error(`Invoice '${payload.invoice_id}' not found.`);
+  }
+  if (inv.status === 'VOID') {
+    throw new Error(`Invoice '${payload.invoice_id}' is already VOID.`);
+  }
+
+  const allocRes = await db.query<{ paid: string }>(
+    `SELECT COALESCE(SUM(allocated_amount_ghs), 0) AS paid FROM payment_allocations WHERE invoice_id = $1`,
+    [inv.id]
+  );
+  if (Number(allocRes.rows[0]?.paid || 0) > 0) {
+    throw new Error(
+      `Cannot void Invoice ${inv.reference_code} while it has active payments allocated (GHS ${allocRes.rows[0].paid}). Reverse the payment(s) first.`
+    );
+  }
+
+  await db.query(
+    `UPDATE invoices
+     SET status = 'VOID',
+         description = COALESCE(description || ' | ', '') || $1,
+         updated_at = NOW()
+     WHERE id = $2`,
+    [`VOIDED by ${actor.full_name}: ${payload.reason.trim()}`, inv.id]
+  );
+
+  // Post Reversing Journal Entry: Dr Revenue/Unearned, Cr Accounts Receivable (1200)
+  const revenueAccountByService: Record<string, string> = {
+    'WORK ABROAD': '4200',
+    'STUDY ABROAD': '4300',
+    'VISIT VISA': '4400',
+    'BUSINESS VISA': '4400',
+    'AIR TICKETING': '4500',
+    'TRAVEL CONSULTATION': '4100',
+  };
+  const creditAccount =
+    inv.revenue_recognition_mode === 'UNEARNED_LIABILITY'
+      ? '2100'
+      : revenueAccountByService[inv.service_type] || '4100';
+
+  const jnlId = await nextReferenceCode(db, 'seq_journal_ref', 'JNL', 6);
+  const amountGhs = Number(inv.total_amount_ghs);
+
+  await db.query(
+    `INSERT INTO journal_entries (id, reference_code, entry_date, source_module, source_id, description, posted_by)
+     VALUES ($1,$2,CURRENT_DATE,'REVERSAL',$3,$4,$5)`,
+    [
+      jnlId,
+      jnlId,
+      inv.id,
+      `VOID of Invoice ${inv.reference_code}: ${payload.reason.trim()}`,
+      actor.full_name,
+    ]
+  );
+
+  await db.query(
+    `INSERT INTO journal_lines (id, journal_entry_id, account_code, debit_ghs, credit_ghs, client_id, service_case_id, memo)
+     VALUES ($1,$2,$3,$4,0,$5,$6,$7), ($8,$2,'1200',0,$4,$5,$6,$7)`,
+    [
+      `${jnlId}-L1`,
+      jnlId,
+      creditAccount,
+      amountGhs,
+      inv.client_id,
+      inv.service_case_id || null,
+      `Void Invoice ${inv.reference_code}`,
+      `${jnlId}-L2`,
+    ]
+  );
+
+  await writeAuditLog(
+    actor,
+    'INVOICE_VOIDED',
+    'INVOICE',
+    inv.id,
+    `Voided Invoice ${inv.reference_code} (GHS ${amountGhs}) via Reversing Journal ${jnlId}. Reason: ${payload.reason.trim()}`
+  );
+
+  return { invoice_id: inv.id, journal_entry_id: jnlId };
 }

@@ -4,6 +4,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { Pool } from 'pg';
 import { evaluateCandidateMatch } from '../matching/engine';
 import { mapWorkbookRoleToSystemRoles } from '../auth/rbac';
+import { hashPassword, DEFAULT_CEO_PASSWORD, DEFAULT_STAFF_PASSWORD } from '../auth/session';
 
 export interface QueryResult<T = Record<string, any>> {
   rows: T[];
@@ -97,8 +98,23 @@ async function initializeSchemaAndSeed(db: DatabaseAdapter): Promise<void> {
   const schemaSql = fs.readFileSync(migrationPath, 'utf-8');
   await db.exec(schemaSql);
 
+  // Idempotent schema upgrades for authentication & embedded document file uploads
+  await db.exec(`
+    ALTER TABLE staff_users ADD COLUMN IF NOT EXISTS password_hash TEXT;
+    ALTER TABLE client_documents ADD COLUMN IF NOT EXISTS file_name TEXT;
+    ALTER TABLE client_documents ADD COLUMN IF NOT EXISTS file_mime_type TEXT;
+    ALTER TABLE client_documents ADD COLUMN IF NOT EXISTS file_size_bytes INTEGER;
+    ALTER TABLE client_documents ADD COLUMN IF NOT EXISTS file_data_url TEXT;
+  `);
+
   const existingStaff = await db.query<{ count: string }>('SELECT COUNT(*) AS count FROM staff_users');
   if (Number(existingStaff.rows[0]?.count || 0) > 0) {
+    // Backfill default password hashes for any existing staff users missing one
+    const noPass = await db.query<{ id: string }>('SELECT id FROM staff_users WHERE password_hash IS NULL OR password_hash = \'\'');
+    for (const s of noPass.rows) {
+      const pwd = s.id === 'STF-01' ? DEFAULT_CEO_PASSWORD : DEFAULT_STAFF_PASSWORD;
+      await db.query('UPDATE staff_users SET password_hash = $1 WHERE id = $2', [hashPassword(pwd), s.id]);
+    }
     return;
   }
 
@@ -182,10 +198,11 @@ async function initializeSchemaAndSeed(db: DatabaseAdapter): Promise<void> {
   for (const [code, fullName, wbRole, phone, email, branch, status] of staffRows) {
     const sysRoles = mapWorkbookRoleToSystemRoles(wbRole);
     staffIdByName[fullName] = code;
+    const pwdHash = hashPassword(code === 'STF-01' ? DEFAULT_CEO_PASSWORD : DEFAULT_STAFF_PASSWORD);
     await db.query(
-      `INSERT INTO staff_users (id, reference_code, legacy_id, full_name, primary_role, roles_json, phone, email, branch, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [code, code, code, fullName, sysRoles[0], JSON.stringify(sysRoles), phone, email, branch, status]
+      `INSERT INTO staff_users (id, reference_code, legacy_id, full_name, primary_role, roles_json, phone, email, branch, status, password_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [code, code, code, fullName, sysRoles[0], JSON.stringify(sysRoles), phone, email, branch, status, pwdHash]
     );
   }
 

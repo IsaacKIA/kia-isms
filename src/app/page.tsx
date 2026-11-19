@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { StatusBadge } from '@/components/Badge';
 import { ClientProfileModal } from '@/components/ClientProfileModal';
+import { PrintableDocumentModal } from '@/components/PrintableDocumentModal';
 import {
   LayoutDashboard,
   Users,
@@ -29,6 +30,11 @@ import {
   Trash2,
   UserCheck,
   RotateCcw,
+  Printer,
+  Download,
+  KeyRound,
+  LogOut,
+  Upload,
 } from 'lucide-react';
 
 type NavModule =
@@ -136,17 +142,93 @@ export default function KiaIsmsApp() {
     phone: '',
     email: '',
     branch: 'Ajumako Head Office',
+    password: 'KiaStaff2026!',
+  });
+
+  // Authentication State
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [authChecked, setAuthChecked] = useState<boolean>(false);
+  const [loginEmail, setLoginEmail] = useState<string>('isaac@kiastartupconsult.com');
+  const [loginPassword, setLoginPassword] = useState<string>('');
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginLoading, setLoginLoading] = useState<boolean>(false);
+
+  // Employer & Job Opportunity Forms
+  const [showNewEmployerForm, setShowNewEmployerForm] = useState(false);
+  const [newEmployer, setNewEmployer] = useState({
+    organization_name: '',
+    partner_type: 'DIRECT EMPLOYER',
+    country: 'United Arab Emirates',
+    city: 'Dubai',
+    industry: 'Hospitality',
+    verification_status: 'Verified',
+    agreement_status: 'Signed',
+    notes: '',
+  });
+
+  const [showNewJobForm, setShowNewJobForm] = useState(false);
+  const [newJob, setNewJob] = useState({
+    employer_name: 'Ejadah',
+    country: 'United Arab Emirates',
+    city: 'Dubai',
+    job_title: '',
+    sector: 'Hospitality',
+    gender_requirement: 'Any',
+    min_age: 20,
+    max_age: 40,
+    education_required: 'SHS/WASSCE',
+    experience_type: 'Preferred',
+    min_experience_years: 1,
+    license_required: false,
+    license_type_required: '',
+    pcc_required: false,
+    salary_minimum: 1500,
+    salary_maximum: 1800,
+    salary_currency: 'AED',
+    food_provided: true,
+    accommodation_provided: true,
+    notes: '',
+  });
+
+  // Document File Upload State
+  const [docFile, setDocFile] = useState<{
+    file_name: string;
+    file_mime_type: string;
+    file_size_bytes: number;
+    file_data_url: string;
+  } | null>(null);
+
+  // Printable Receipt / Invoice Modal State
+  const [printableDoc, setPrintableDoc] = useState<any | null>(null);
+
+  // New Invoice Creation Form State
+  const [showNewInvoiceForm, setShowNewInvoiceForm] = useState(false);
+  const [newInvoice, setNewInvoice] = useState({
+    client_id: '',
+    service_case_id: '',
+    service_type: 'WORK ABROAD',
+    currency: 'GHS',
+    total_amount_original: 500,
+    description: 'Placement & Processing Milestone Fee',
   });
 
   const loadState = useCallback(async (targetStaffId = staffId) => {
     setLoading(true);
     try {
       const res = await fetch(`/api/isms?staffId=${encodeURIComponent(targetStaffId)}`);
+      if (res.status === 401) {
+        setIsAuthenticated(false);
+        setAuthChecked(true);
+        setState(null);
+        return;
+      }
       const json = await res.json();
       if (json.ok) {
+        setIsAuthenticated(true);
+        setAuthChecked(true);
         setState(json.data);
         if (json.data.staff && !json.data.staff.some((s: any) => s.id === targetStaffId)) {
-          setStaffId('STF-01');
+          setStaffId(json.data.actor?.id || 'STF-01');
         }
       } else {
         setToast({ type: 'error', message: json.error || 'Failed to load system state' });
@@ -155,12 +237,53 @@ export default function KiaIsmsApp() {
       setToast({ type: 'error', message: e.message || 'Network error' });
     } finally {
       setLoading(false);
+      setAuthChecked(true);
     }
   }, [staffId]);
 
   useEffect(() => {
     loadState(staffId);
   }, [staffId, loadState]);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError(null);
+    setLoginLoading(true);
+    try {
+      const res = await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'LOGIN',
+          email: loginEmail,
+          password: loginPassword,
+        }),
+      });
+      const json = await res.json();
+      if (!json.ok) {
+        setLoginError(json.error || 'Invalid credentials');
+        return;
+      }
+      setStaffId(json.actor.id);
+      setIsAuthenticated(true);
+      await loadState(json.actor.id);
+    } catch (err: any) {
+      setLoginError(err.message || 'Login failed');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await fetch('/api/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'LOGOUT' }),
+    });
+    setIsAuthenticated(false);
+    setState(null);
+    setLoginPassword('');
+  };
 
   const dispatchAction = async (action: string, payload: Record<string, any>) => {
     setToast(null);
@@ -170,6 +293,11 @@ export default function KiaIsmsApp() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, staffId, payload }),
       });
+      if (res.status === 401) {
+        setIsAuthenticated(false);
+        setState(null);
+        return null;
+      }
       const json = await res.json();
       if (!json.ok) {
         setToast({ type: 'error', message: json.error || 'Operation failed' });
@@ -191,7 +319,7 @@ export default function KiaIsmsApp() {
     }
   };
 
-  if (!state) {
+  if (!authChecked || (loading && !state && isAuthenticated)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#0B1F3A] text-white">
         <div className="text-center space-y-3">
@@ -202,6 +330,85 @@ export default function KiaIsmsApp() {
           <p className="text-xs text-slate-300">
             Initializing PostgreSQL Database, Double-Entry Ledger & RBAC Security...
           </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated || !state) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#0B1F3A] p-4">
+        <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full overflow-hidden">
+          <div className="bg-slate-900 text-white p-6 text-center space-y-2 border-b border-slate-800">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500 text-slate-950 font-black text-lg flex items-center justify-center mx-auto shadow-lg">
+              KIA
+            </div>
+            <h1 className="text-base font-extrabold tracking-tight">KIA-START UP CONSULT</h1>
+            <p className="text-xs text-amber-300 font-medium">
+              International Services Management System (KIA-ISMS)
+            </p>
+            <p className="text-[11px] text-slate-400">
+              Ajumako Head Office & Greater Accra Branch • Authorized Staff Sign-In
+            </p>
+          </div>
+
+          <form onSubmit={handleLogin} className="p-6 space-y-4 text-xs">
+            {loginError && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 font-semibold flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{loginError}</span>
+              </div>
+            )}
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">
+                Work Email or Staff Reference Code
+              </label>
+              <input
+                type="text"
+                required
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+                placeholder="e.g. isaac@kiastartupconsult.com or STF-01"
+                className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-600"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Password</label>
+              <input
+                type="password"
+                required
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                placeholder="Enter your staff password"
+                className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-600"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={loginLoading}
+              className="w-full py-2.5 px-4 rounded-xl bg-[#0B1F3A] hover:bg-blue-900 text-white font-bold text-xs flex items-center justify-center gap-2 transition shadow-md"
+            >
+              <Lock className="w-3.5 h-3.5 text-amber-400" />
+              {loginLoading ? 'Signing In...' : 'Sign In to KIA-ISMS'}
+            </button>
+
+            <div className="pt-2 border-t border-slate-200 flex items-center justify-between text-[11px] text-slate-500">
+              <span>Founder / CEO Default Access:</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginEmail('isaac@kiastartupconsult.com');
+                  setLoginPassword('KiaAdmin2026!');
+                }}
+                className="text-blue-700 hover:underline font-bold"
+              >
+                Fill CEO Credentials
+              </button>
+            </div>
+          </form>
         </div>
       </div>
     );
@@ -334,11 +541,51 @@ export default function KiaIsmsApp() {
             </div>
           </div>
 
-          {/* Active Role / Staff Switcher for Testing RBAC & Dashboards */}
+          {/* Active Authenticated Session & CEO Role Switcher */}
           <div className="px-4 py-3 bg-white/5 border-b border-white/10 text-xs">
-            <label className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block mb-1">
-              Active Staff Session (RBAC)
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">
+                Authenticated Session
+              </label>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={async () => {
+                    const newPwd = window.prompt(
+                      `Enter new login password for ${actor.full_name} (min 6 chars):`
+                    );
+                    if (newPwd && newPwd.trim().length >= 6) {
+                      const res = await fetch('/api/auth', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          action: 'CHANGE_PASSWORD',
+                          target_staff_id: actor.id,
+                          new_password: newPwd.trim(),
+                        }),
+                      });
+                      const j = await res.json();
+                      if (j.ok) {
+                        setToast({ type: 'success', message: 'Password updated successfully.' });
+                      } else {
+                        setToast({ type: 'error', message: j.error || 'Failed to update password.' });
+                      }
+                    }
+                  }}
+                  className="text-[10px] text-amber-300 hover:underline flex items-center gap-0.5"
+                  title="Change Password"
+                >
+                  <KeyRound className="w-3 h-3" /> Password
+                </button>
+                <span className="text-slate-600">•</span>
+                <button
+                  onClick={handleLogout}
+                  className="text-[10px] text-rose-300 hover:underline flex items-center gap-0.5"
+                  title="Sign Out"
+                >
+                  <LogOut className="w-3 h-3" /> Sign Out
+                </button>
+              </div>
+            </div>
             <select
               value={staffId}
               onChange={(e) => {
@@ -1332,54 +1579,396 @@ export default function KiaIsmsApp() {
               )}
 
               {workTab === 'opportunities' && (
-                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
-                          <th className="py-3 px-4">Job ID</th>
-                          <th className="py-3 px-4">Employer & Partner</th>
-                          <th className="py-3 px-4">Job Title & Sector</th>
-                          <th className="py-3 px-4">Destination</th>
-                          <th className="py-3 px-4">Original Salary</th>
-                          <th className="py-3 px-4">Requirements</th>
-                          <th className="py-3 px-4">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200">
-                        {state.jobOpportunities.map((j: any) => (
-                          <tr key={j.id} className="hover:bg-slate-50">
-                            <td className="py-3 px-4 font-mono font-bold text-blue-800">
-                              {j.reference_code}
-                            </td>
-                            <td className="py-3 px-4 font-semibold">{j.employer_name}</td>
-                            <td className="py-3 px-4">
-                              <div className="font-bold text-slate-900">{j.job_title}</div>
-                              <div className="text-slate-500">{j.sector}</div>
-                            </td>
-                            <td className="py-3 px-4">
-                              {j.city ? `${j.city}, ` : ''}
-                              {j.country}
-                            </td>
-                            <td className="py-3 px-4 font-mono font-bold">
-                              {j.salary_minimum
-                                ? `${j.salary_currency} ${Number(
-                                    j.salary_minimum
-                                  ).toLocaleString()}`
-                                : 'Program / Stipend'}
-                            </td>
-                            <td className="py-3 px-4 text-slate-600">
-                              Age: {j.minimum_age}–{j.maximum_age} • Edu: {j.education_requirement}{' '}
-                              • Exp: {j.years_experience_required}y
-                              {j.license_required ? ` • Lic: ${j.license_type}` : ''}
-                            </td>
-                            <td className="py-3 px-4">
-                              <StatusBadge value={j.opportunity_status} />
-                            </td>
+                <div className="space-y-4 text-xs">
+                  {/* Action Bar for Employers & Job Opportunities */}
+                  <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="font-bold text-sm text-slate-900">
+                        Verified International Job Opportunities ({state.jobOpportunities.length}) & Employers ({state.partners.length})
+                      </h3>
+                      <p className="text-slate-500 text-[11px]">
+                        Add new job vacancies, register international employer partners, or update vacancy availability.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          setShowNewEmployerForm(!showNewEmployerForm);
+                          setShowNewJobForm(false);
+                        }}
+                        className="px-3.5 py-2 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-800 font-bold flex items-center gap-1.5 transition"
+                      >
+                        <Building2 className="w-4 h-4 text-blue-700" />
+                        {showNewEmployerForm ? 'Close Partner Form' : '+ Register Employer'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowNewJobForm(!showNewJobForm);
+                          setShowNewEmployerForm(false);
+                        }}
+                        className="px-4 py-2 rounded-xl bg-blue-700 hover:bg-blue-800 text-white font-bold flex items-center gap-1.5 transition"
+                      >
+                        <Plus className="w-4 h-4" />
+                        {showNewJobForm ? 'Close Job Form' : '+ Add Job Opportunity'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Register Employer Partner Form */}
+                  {showNewEmployerForm && (
+                    <div className="bg-white p-5 rounded-2xl border-2 border-blue-600 shadow-sm space-y-3">
+                      <h4 className="font-bold text-sm text-slate-900">
+                        Register New International Employer / Recruitment Partner
+                      </h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Organization Name *
+                          </label>
+                          <input
+                            type="text"
+                            value={newEmployer.organization_name}
+                            onChange={(e) =>
+                              setNewEmployer({ ...newEmployer, organization_name: e.target.value })
+                            }
+                            placeholder="e.g. Qatar Airways Facilities"
+                            className="w-full rounded-lg border border-slate-300 px-3 py-1.5"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Partner Type
+                          </label>
+                          <select
+                            value={newEmployer.partner_type}
+                            onChange={(e) =>
+                              setNewEmployer({ ...newEmployer, partner_type: e.target.value })
+                            }
+                            className="w-full rounded-lg border border-slate-300 px-3 py-1.5 bg-white"
+                          >
+                            <option value="DIRECT EMPLOYER">DIRECT EMPLOYER</option>
+                            <option value="RECRUITMENT AGENCY">RECRUITMENT AGENCY</option>
+                            <option value="UNIVERSITY/COLLEGE">UNIVERSITY/COLLEGE</option>
+                            <option value="TRAVEL PARTNER">TRAVEL PARTNER</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Country *
+                          </label>
+                          <input
+                            type="text"
+                            value={newEmployer.country}
+                            onChange={(e) =>
+                              setNewEmployer({ ...newEmployer, country: e.target.value })
+                            }
+                            placeholder="e.g. Qatar"
+                            className="w-full rounded-lg border border-slate-300 px-3 py-1.5"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">City</label>
+                          <input
+                            type="text"
+                            value={newEmployer.city}
+                            onChange={(e) =>
+                              setNewEmployer({ ...newEmployer, city: e.target.value })
+                            }
+                            placeholder="e.g. Doha"
+                            className="w-full rounded-lg border border-slate-300 px-3 py-1.5"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Industry / Sector
+                          </label>
+                          <input
+                            type="text"
+                            value={newEmployer.industry}
+                            onChange={(e) =>
+                              setNewEmployer({ ...newEmployer, industry: e.target.value })
+                            }
+                            placeholder="e.g. Aviation / Hospitality"
+                            className="w-full rounded-lg border border-slate-300 px-3 py-1.5"
+                          />
+                        </div>
+                        <div className="flex items-end">
+                          <button
+                            onClick={async () => {
+                              const res = await dispatchAction('CREATE_EMPLOYER', newEmployer);
+                              if (res) {
+                                setShowNewEmployerForm(false);
+                                setNewEmployer({
+                                  organization_name: '',
+                                  partner_type: 'DIRECT EMPLOYER',
+                                  country: 'United Arab Emirates',
+                                  city: 'Dubai',
+                                  industry: 'Hospitality',
+                                  verification_status: 'Verified',
+                                  agreement_status: 'Signed',
+                                  notes: '',
+                                });
+                              }
+                            }}
+                            className="w-full py-2 px-4 rounded-xl bg-blue-700 hover:bg-blue-800 text-white font-bold"
+                          >
+                            Save Employer Partner
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Add Job Opportunity Form */}
+                  {showNewJobForm && (
+                    <div className="bg-white p-5 rounded-2xl border-2 border-blue-600 shadow-sm space-y-3">
+                      <h4 className="font-bold text-sm text-slate-900">
+                        Create New International Job Opportunity
+                      </h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Employer / Partner *
+                          </label>
+                          <input
+                            type="text"
+                            list="kia-employers-list"
+                            value={newJob.employer_name}
+                            onChange={(e) =>
+                              setNewJob({ ...newJob, employer_name: e.target.value })
+                            }
+                            placeholder="Select or type employer"
+                            className="w-full rounded-lg border border-slate-300 px-3 py-1.5"
+                          />
+                          <datalist id="kia-employers-list">
+                            {state.partners.map((p: any) => (
+                              <option key={p.id} value={p.organization_name} />
+                            ))}
+                          </datalist>
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Job Title *
+                          </label>
+                          <input
+                            type="text"
+                            value={newJob.job_title}
+                            onChange={(e) => setNewJob({ ...newJob, job_title: e.target.value })}
+                            placeholder="e.g. Heavy Truck Driver"
+                            className="w-full rounded-lg border border-slate-300 px-3 py-1.5"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Country *
+                          </label>
+                          <input
+                            type="text"
+                            value={newJob.country}
+                            onChange={(e) => setNewJob({ ...newJob, country: e.target.value })}
+                            placeholder="e.g. United Arab Emirates"
+                            className="w-full rounded-lg border border-slate-300 px-3 py-1.5"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            City & Sector
+                          </label>
+                          <div className="flex gap-1.5">
+                            <input
+                              type="text"
+                              value={newJob.city}
+                              onChange={(e) => setNewJob({ ...newJob, city: e.target.value })}
+                              placeholder="City"
+                              className="w-1/2 rounded-lg border border-slate-300 px-2.5 py-1.5"
+                            />
+                            <input
+                              type="text"
+                              value={newJob.sector}
+                              onChange={(e) => setNewJob({ ...newJob, sector: e.target.value })}
+                              placeholder="Sector"
+                              className="w-1/2 rounded-lg border border-slate-300 px-2.5 py-1.5"
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Salary & Currency
+                          </label>
+                          <div className="flex gap-1.5">
+                            <input
+                              type="text"
+                              value={newJob.salary_currency}
+                              onChange={(e) =>
+                                setNewJob({ ...newJob, salary_currency: e.target.value })
+                              }
+                              placeholder="AED"
+                              className="w-16 rounded-lg border border-slate-300 px-2 py-1.5 font-mono"
+                            />
+                            <input
+                              type="number"
+                              value={newJob.salary_minimum}
+                              onChange={(e) =>
+                                setNewJob({
+                                  ...newJob,
+                                  salary_minimum: Number(e.target.value),
+                                  salary_maximum: Number(e.target.value),
+                                })
+                              }
+                              placeholder="Min Salary"
+                              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5"
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Age Range (Min – Max)
+                          </label>
+                          <div className="flex gap-1.5">
+                            <input
+                              type="number"
+                              value={newJob.min_age}
+                              onChange={(e) =>
+                                setNewJob({ ...newJob, min_age: Number(e.target.value) })
+                              }
+                              className="w-1/2 rounded-lg border border-slate-300 px-2.5 py-1.5"
+                            />
+                            <input
+                              type="number"
+                              value={newJob.max_age}
+                              onChange={(e) =>
+                                setNewJob({ ...newJob, max_age: Number(e.target.value) })
+                              }
+                              className="w-1/2 rounded-lg border border-slate-300 px-2.5 py-1.5"
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Min Education & Exp (Yrs)
+                          </label>
+                          <div className="flex gap-1.5">
+                            <select
+                              value={newJob.education_required}
+                              onChange={(e) =>
+                                setNewJob({ ...newJob, education_required: e.target.value })
+                              }
+                              className="w-2/3 rounded-lg border border-slate-300 px-2 py-1.5 bg-white"
+                            >
+                              <option value="Basic/JHS">Basic/JHS</option>
+                              <option value="SHS/WASSCE">SHS/WASSCE</option>
+                              <option value="Vocational/Technical">Vocational/Technical</option>
+                              <option value="Diploma">Diploma</option>
+                              <option value="HND">HND</option>
+                              <option value="Bachelor's Degree">Bachelor&apos;s Degree</option>
+                            </select>
+                            <input
+                              type="number"
+                              value={newJob.min_experience_years}
+                              onChange={(e) =>
+                                setNewJob({
+                                  ...newJob,
+                                  min_experience_years: Number(e.target.value),
+                                })
+                              }
+                              className="w-1/3 rounded-lg border border-slate-300 px-2 py-1.5"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex items-end">
+                          <button
+                            onClick={async () => {
+                              const res = await dispatchAction('CREATE_JOB_OPPORTUNITY', newJob);
+                              if (res) {
+                                setShowNewJobForm(false);
+                                setNewJob({
+                                  ...newJob,
+                                  job_title: '',
+                                  notes: '',
+                                });
+                              }
+                            }}
+                            className="w-full py-2 px-4 rounded-xl bg-blue-700 hover:bg-blue-800 text-white font-bold"
+                          >
+                            Publish Job Opportunity
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Job Opportunities Table */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
+                            <th className="py-3 px-4">Job ID</th>
+                            <th className="py-3 px-4">Employer & Partner</th>
+                            <th className="py-3 px-4">Job Title & Sector</th>
+                            <th className="py-3 px-4">Destination</th>
+                            <th className="py-3 px-4">Original Salary</th>
+                            <th className="py-3 px-4">Requirements</th>
+                            <th className="py-3 px-4">Status & Action</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          {state.jobOpportunities.map((j: any) => (
+                            <tr key={j.id} className="hover:bg-slate-50">
+                              <td className="py-3 px-4 font-mono font-bold text-blue-800">
+                                {j.reference_code}
+                              </td>
+                              <td className="py-3 px-4 font-semibold">{j.employer_name}</td>
+                              <td className="py-3 px-4">
+                                <div className="font-bold text-slate-900">{j.job_title}</div>
+                                <div className="text-slate-500">{j.sector}</div>
+                              </td>
+                              <td className="py-3 px-4">
+                                {j.city ? `${j.city}, ` : ''}
+                                {j.country}
+                              </td>
+                              <td className="py-3 px-4 font-mono font-bold">
+                                {j.salary_minimum
+                                  ? `${j.salary_currency} ${Number(
+                                      j.salary_minimum
+                                    ).toLocaleString()}`
+                                  : 'Program / Stipend'}
+                              </td>
+                              <td className="py-3 px-4 text-slate-600">
+                                Age: {j.min_age ?? 18}–{j.max_age ?? 50} • Edu:{' '}
+                                {j.education_required || 'Any'} • Exp:{' '}
+                                {j.min_experience_years ?? 0}y
+                                {j.license_required
+                                  ? ` • Lic: ${j.license_type_required || 'Req'}`
+                                  : ''}
+                              </td>
+                              <td className="py-3 px-4">
+                                <select
+                                  value={j.opportunity_status || 'Open'}
+                                  onChange={(e) =>
+                                    dispatchAction('TOGGLE_JOB_STATUS', {
+                                      job_id: j.id,
+                                      opportunity_status: e.target.value,
+                                    })
+                                  }
+                                  className={`rounded-lg border px-2 py-1 text-xs font-bold ${
+                                    j.opportunity_status === 'Open'
+                                      ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                                      : j.opportunity_status === 'On Hold'
+                                      ? 'bg-amber-50 border-amber-300 text-amber-800'
+                                      : 'bg-slate-100 border-slate-300 text-slate-700'
+                                  }`}
+                                >
+                                  <option value="Open">Open</option>
+                                  <option value="On Hold">On Hold</option>
+                                  <option value="Closed">Closed</option>
+                                </select>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1663,9 +2252,9 @@ export default function KiaIsmsApp() {
               {/* Verify / Upload Document Form */}
               <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-3">
                 <h3 className="font-bold text-sm text-slate-900">
-                  Verify / Update Client Document (Synchronizes Passport Expiry Radar)
+                  Upload & Verify Client Document (Synchronizes Passport Expiry Radar & Stores File Scan)
                 </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-6 gap-3">
                   <select
                     value={docClientId}
                     onChange={(e) => setDocClientId(e.target.value)}
@@ -1674,11 +2263,14 @@ export default function KiaIsmsApp() {
                     {state.clients.length === 0 ? (
                       <option value="">No clients registered yet</option>
                     ) : (
-                      state.clients.map((c: any) => (
-                        <option key={c.id} value={c.id}>
-                          {c.reference_code} — {c.full_name}
-                        </option>
-                      ))
+                      <>
+                        <option value="">-- Select Client --</option>
+                        {state.clients.map((c: any) => (
+                          <option key={c.id} value={c.id}>
+                            {c.reference_code} — {c.full_name}
+                          </option>
+                        ))}
+                      </>
                     )}
                   </select>
                   <select
@@ -1708,19 +2300,67 @@ export default function KiaIsmsApp() {
                     onChange={(e) => setDocExp(e.target.value)}
                     className="rounded-lg border border-slate-300 px-2.5 py-2"
                   />
+                  <label className="rounded-lg border border-dashed border-blue-400 bg-blue-50/50 hover:bg-blue-50 px-2.5 py-2 flex items-center justify-center gap-1.5 cursor-pointer text-blue-800 font-semibold truncate">
+                    <Upload className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">
+                      {docFile ? docFile.file_name : 'Attach PDF/Image'}
+                    </span>
+                    <input
+                      type="file"
+                      accept=".pdf,image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (!f) {
+                          setDocFile(null);
+                          return;
+                        }
+                        if (f.size > 4 * 1024 * 1024) {
+                          setToast({
+                            type: 'error',
+                            message: 'File size exceeds 4 MB limit.',
+                          });
+                          return;
+                        }
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                          setDocFile({
+                            file_name: f.name,
+                            file_mime_type: f.type || 'application/octet-stream',
+                            file_size_bytes: f.size,
+                            file_data_url: String(reader.result || ''),
+                          });
+                        };
+                        reader.readAsDataURL(f);
+                      }}
+                    />
+                  </label>
                   <button
-                    onClick={() =>
-                      dispatchAction('VERIFY_DOCUMENT', {
-                        client_id: docClientId,
+                    onClick={async () => {
+                      const targetClient = docClientId || state.clients[0]?.id;
+                      if (!targetClient) {
+                        setToast({
+                          type: 'error',
+                          message: 'Please register and select a client first.',
+                        });
+                        return;
+                      }
+                      const res = await dispatchAction('VERIFY_DOCUMENT', {
+                        client_id: targetClient,
                         document_type: docType,
                         document_number: docNum,
                         expiry_date: docExp,
                         verified: true,
-                      })
-                    }
+                        ...(docFile || {}),
+                      });
+                      if (res) {
+                        setDocFile(null);
+                        setDocNum('');
+                      }
+                    }}
                     className="rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2"
                   >
-                    Verify Document
+                    Upload & Verify
                   </button>
                 </div>
               </div>
@@ -1788,7 +2428,7 @@ export default function KiaIsmsApp() {
                       <th className="py-3 px-4">Document Number</th>
                       <th className="py-3 px-4">Expiry Date</th>
                       <th className="py-3 px-4">Status</th>
-                      <th className="py-3 px-4">Notes</th>
+                      <th className="py-3 px-4">File Attachment</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
@@ -1802,7 +2442,20 @@ export default function KiaIsmsApp() {
                         <td className="py-3 px-4">
                           <StatusBadge value={d.document_status} />
                         </td>
-                        <td className="py-3 px-4 text-slate-500">{d.notes || '—'}</td>
+                        <td className="py-3 px-4">
+                          {d.file_data_url ? (
+                            <a
+                              href={d.file_data_url}
+                              download={d.file_name || `${d.reference_code}-${d.document_type}`}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 font-semibold hover:bg-blue-100"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              {d.file_name || 'Download Scan'}
+                            </a>
+                          ) : (
+                            <span className="text-slate-400">No file attached</span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -2177,45 +2830,210 @@ export default function KiaIsmsApp() {
               )}
 
               {finTab === 'invoices' && (
-                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
-                        <th className="py-3 px-4">Invoice #</th>
-                        <th className="py-3 px-4">Client & Case</th>
-                        <th className="py-3 px-4">Description</th>
-                        <th className="py-3 px-4">Total (GHS)</th>
-                        <th className="py-3 px-4">Allocated Paid (GHS)</th>
-                        <th className="py-3 px-4">Balance (GHS)</th>
-                        <th className="py-3 px-4">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200">
-                      {state.invoices.map((inv: any) => (
-                        <tr key={inv.id}>
-                          <td className="py-3 px-4 font-mono font-bold text-blue-800">
-                            {inv.reference_code}
-                          </td>
-                          <td className="py-3 px-4 font-semibold">
-                            {inv.client_name} ({inv.service_case_id || '—'})
-                          </td>
-                          <td className="py-3 px-4">{inv.description}</td>
-                          <td className="py-3 px-4 font-bold">
-                            GHS {Number(inv.total_amount_ghs).toLocaleString()}
-                          </td>
-                          <td className="py-3 px-4 text-emerald-700 font-bold">
-                            GHS {Number(inv.paid_amount_ghs).toLocaleString()}
-                          </td>
-                          <td className="py-3 px-4 text-rose-600 font-bold">
-                            GHS {Number(inv.outstanding_amount_ghs).toLocaleString()}
-                          </td>
-                          <td className="py-3 px-4">
-                            <StatusBadge value={inv.status} />
-                          </td>
+                <div className="space-y-4">
+                  <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="font-bold text-sm text-slate-900">
+                        Client Billing & Service Invoices ({state.invoices.length})
+                      </h3>
+                      <p className="text-slate-500 text-[11px]">
+                        Issue milestone invoices, print official client tax/service invoices, or void uncollected bills.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setShowNewInvoiceForm(!showNewInvoiceForm)}
+                      className="px-4 py-2 rounded-xl bg-blue-700 hover:bg-blue-800 text-white font-bold flex items-center gap-1.5 transition"
+                    >
+                      <Plus className="w-4 h-4" />
+                      {showNewInvoiceForm ? 'Close Form' : '+ Issue Client Invoice'}
+                    </button>
+                  </div>
+
+                  {showNewInvoiceForm && (
+                    <div className="bg-white p-5 rounded-2xl border-2 border-blue-600 shadow-sm space-y-3">
+                      <h4 className="font-bold text-sm text-slate-900">
+                        Issue New Milestone / Service Invoice (Posts Double-Entry Receivable)
+                      </h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+                        <select
+                          value={newInvoice.client_id}
+                          onChange={(e) => {
+                            const cid = e.target.value;
+                            const firstCase = state.serviceCases.find(
+                              (sc: any) => sc.client_id === cid
+                            );
+                            setNewInvoice({
+                              ...newInvoice,
+                              client_id: cid,
+                              service_case_id: firstCase?.id || '',
+                              service_type: firstCase?.service_type || 'WORK ABROAD',
+                            });
+                          }}
+                          className="rounded-lg border border-slate-300 px-2.5 py-2 bg-white"
+                        >
+                          <option value="">-- Select Client --</option>
+                          {state.clients.map((c: any) => (
+                            <option key={c.id} value={c.id}>
+                              {c.reference_code} — {c.full_name}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          value={newInvoice.service_case_id}
+                          onChange={(e) => {
+                            const sc = state.serviceCases.find(
+                              (c: any) => c.id === e.target.value
+                            );
+                            setNewInvoice({
+                              ...newInvoice,
+                              service_case_id: e.target.value,
+                              service_type: sc?.service_type || newInvoice.service_type,
+                            });
+                          }}
+                          className="rounded-lg border border-slate-300 px-2.5 py-2 bg-white"
+                        >
+                          <option value="">-- Linked Case (Optional) --</option>
+                          {state.serviceCases
+                            .filter((sc: any) => !newInvoice.client_id || sc.client_id === newInvoice.client_id)
+                            .map((sc: any) => (
+                              <option key={sc.id} value={sc.id}>
+                                {sc.reference_code} ({sc.service_type})
+                              </option>
+                            ))}
+                        </select>
+                        <input
+                          type="text"
+                          value={newInvoice.description}
+                          onChange={(e) =>
+                            setNewInvoice({ ...newInvoice, description: e.target.value })
+                          }
+                          placeholder="Invoice Description"
+                          className="rounded-lg border border-slate-300 px-2.5 py-2"
+                        />
+                        <div className="flex gap-1.5">
+                          <select
+                            value={newInvoice.currency}
+                            onChange={(e) =>
+                              setNewInvoice({ ...newInvoice, currency: e.target.value })
+                            }
+                            className="rounded-lg border border-slate-300 px-2 py-2 bg-white"
+                          >
+                            {state.exchangeRates.map((r: any) => (
+                              <option key={r.currency_code} value={r.currency_code}>
+                                {r.currency_code}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="number"
+                            value={newInvoice.total_amount_original}
+                            onChange={(e) =>
+                              setNewInvoice({
+                                ...newInvoice,
+                                total_amount_original: Number(e.target.value),
+                              })
+                            }
+                            className="w-full rounded-lg border border-slate-300 px-2.5 py-2"
+                          />
+                        </div>
+                        <button
+                          onClick={async () => {
+                            if (!newInvoice.client_id) {
+                              setToast({ type: 'error', message: 'Please select a client.' });
+                              return;
+                            }
+                            const res = await dispatchAction('CREATE_INVOICE', newInvoice);
+                            if (res) {
+                              setShowNewInvoiceForm(false);
+                            }
+                          }}
+                          className="rounded-xl bg-blue-700 hover:bg-blue-800 text-white font-bold px-4 py-2"
+                        >
+                          Post & Issue Invoice
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
+                          <th className="py-3 px-4">Invoice #</th>
+                          <th className="py-3 px-4">Client & Case</th>
+                          <th className="py-3 px-4">Description</th>
+                          <th className="py-3 px-4">Total (GHS)</th>
+                          <th className="py-3 px-4">Allocated Paid (GHS)</th>
+                          <th className="py-3 px-4">Balance (GHS)</th>
+                          <th className="py-3 px-4">Status</th>
+                          <th className="py-3 px-4 text-right">Actions</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {state.invoices.map((inv: any) => (
+                          <tr key={inv.id}>
+                            <td className="py-3 px-4 font-mono font-bold text-blue-800">
+                              {inv.reference_code}
+                            </td>
+                            <td className="py-3 px-4 font-semibold">
+                              {inv.client_name} ({inv.service_case_id || '—'})
+                            </td>
+                            <td className="py-3 px-4">{inv.description}</td>
+                            <td className="py-3 px-4 font-bold">
+                              GHS {Number(inv.total_amount_ghs).toLocaleString()}
+                            </td>
+                            <td className="py-3 px-4 text-emerald-700 font-bold">
+                              GHS {Number(inv.paid_amount_ghs).toLocaleString()}
+                            </td>
+                            <td className="py-3 px-4 text-rose-600 font-bold">
+                              GHS {Number(inv.outstanding_amount_ghs).toLocaleString()}
+                            </td>
+                            <td className="py-3 px-4">
+                              <StatusBadge value={inv.status} />
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              <div className="inline-flex items-center gap-1.5">
+                                <button
+                                  onClick={() =>
+                                    setPrintableDoc({
+                                      kind: 'INVOICE',
+                                      invoice: inv,
+                                      client: state.clients.find((c: any) => c.id === inv.client_id),
+                                      serviceCase: state.serviceCases.find(
+                                        (sc: any) => sc.id === inv.service_case_id
+                                      ),
+                                    })
+                                  }
+                                  className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-blue-800 text-white font-semibold inline-flex items-center gap-1"
+                                >
+                                  <Printer className="w-3 h-3" /> Print
+                                </button>
+                                {inv.status !== 'VOID' && Number(inv.paid_amount_ghs || 0) === 0 && (
+                                  <button
+                                    onClick={() => {
+                                      const reason = window.prompt(
+                                        `Enter documented audit reason to VOID Invoice ${inv.reference_code}:`,
+                                        'Billing entry error / cancelled before collection'
+                                      );
+                                      if (reason) {
+                                        dispatchAction('VOID_INVOICE', {
+                                          invoice_id: inv.id,
+                                          reason,
+                                        });
+                                      }
+                                    }}
+                                    className="px-2 py-1 rounded-lg border border-rose-300 text-rose-700 hover:bg-rose-50 font-semibold"
+                                  >
+                                    Void
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
 
@@ -2229,7 +3047,8 @@ export default function KiaIsmsApp() {
                         <th className="py-3 px-4">Client & Case</th>
                         <th className="py-3 px-4">Amount (GHS)</th>
                         <th className="py-3 px-4">Method & Ref</th>
-                        <th className="py-3 px-4">Reconciliation</th>
+                        <th className="py-3 px-4">Status & Reconciliation</th>
+                        <th className="py-3 px-4 text-right">Official Receipt & Reversal</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200">
@@ -2249,18 +3068,60 @@ export default function KiaIsmsApp() {
                             {p.payment_method} ({p.transaction_reference || 'Cash Drawer'})
                           </td>
                           <td className="py-3 px-4">
-                            {p.reconciled ? (
-                              <StatusBadge value="RECONCILED" />
-                            ) : (
+                            <div className="flex items-center gap-1.5">
+                              <StatusBadge value={p.payment_status} />
+                              {p.payment_status === 'PAID' &&
+                                (p.reconciled ? (
+                                  <StatusBadge value="RECONCILED" />
+                                ) : (
+                                  <button
+                                    onClick={() =>
+                                      dispatchAction('RECONCILE_PAYMENT', { payment_id: p.id })
+                                    }
+                                    className="px-2 py-0.5 rounded bg-blue-700 text-white font-semibold"
+                                  >
+                                    Reconcile
+                                  </button>
+                                ))}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <div className="inline-flex items-center gap-1.5">
                               <button
                                 onClick={() =>
-                                  dispatchAction('RECONCILE_PAYMENT', { payment_id: p.id })
+                                  setPrintableDoc({
+                                    kind: 'RECEIPT',
+                                    payment: p,
+                                    client: state.clients.find((c: any) => c.id === p.client_id),
+                                    serviceCase: state.serviceCases.find(
+                                      (sc: any) => sc.id === p.service_case_id
+                                    ),
+                                  })
                                 }
-                                className="px-2.5 py-1 rounded bg-blue-700 text-white font-semibold"
+                                className="px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-semibold inline-flex items-center gap-1"
                               >
-                                Reconcile Now
+                                <Printer className="w-3 h-3" /> Print Receipt
                               </button>
-                            )}
+                              {p.payment_status === 'PAID' && (
+                                <button
+                                  onClick={() => {
+                                    const reason = window.prompt(
+                                      `Enter documented audit reason to REVERSE Payment ${p.receipt_number} (GHS ${p.amount_ghs}):`,
+                                      'Data entry error / reversal approved by Finance'
+                                    );
+                                    if (reason) {
+                                      dispatchAction('REVERSE_PAYMENT', {
+                                        payment_id: p.id,
+                                        reason,
+                                      });
+                                    }
+                                  }}
+                                  className="px-2 py-1 rounded-lg border border-rose-300 text-rose-700 hover:bg-rose-50 font-semibold"
+                                >
+                                  Reverse
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -2790,7 +3651,19 @@ export default function KiaIsmsApp() {
                           className="w-full rounded-lg border border-slate-300 px-3 py-1.5 bg-white text-slate-900 text-xs"
                         />
                       </div>
-                      <div className="flex items-end">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          Initial Login Password *
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. KiaStaff2026!"
+                          value={newStaff.password}
+                          onChange={(e) => setNewStaff({ ...newStaff, password: e.target.value })}
+                          className="w-full rounded-lg border border-slate-300 px-3 py-1.5 bg-white text-slate-900 text-xs font-mono"
+                        />
+                      </div>
+                      <div className="md:col-span-3 flex justify-end pt-1">
                         <button
                           onClick={async () => {
                             if (!newStaff.full_name || !newStaff.email) {
@@ -2807,12 +3680,13 @@ export default function KiaIsmsApp() {
                                 phone: '',
                                 email: '',
                                 branch: 'Ajumako Head Office',
+                                password: 'KiaStaff2026!',
                               });
                             }
                           }}
-                          className="w-full px-4 py-2 rounded-xl bg-blue-700 hover:bg-blue-800 text-white font-bold transition-colors"
+                          className="px-6 py-2 rounded-xl bg-blue-700 hover:bg-blue-800 text-white font-bold transition-colors"
                         >
-                          Save & Onboard Staff
+                          Save & Onboard Staff Account
                         </button>
                       </div>
                     </div>
@@ -2861,22 +3735,61 @@ export default function KiaIsmsApp() {
                         </div>
                         <div className="flex flex-col items-end gap-2 shrink-0">
                           <StatusBadge value={s.status} />
-                          {!isCeoUser && isCeoOrManager && (
-                            <button
-                              onClick={() => {
-                                if (
-                                  window.confirm(
-                                    `Are you sure you want to remove staff member ${s.full_name}? Any assigned cases will be reassigned to the CEO.`
-                                  )
-                                ) {
-                                  dispatchAction('DELETE_STAFF', { staff_id: s.id });
-                                }
-                              }}
-                              className="text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50 transition-colors"
-                              title="Remove Staff"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                          {isCeoOrManager && (
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={async () => {
+                                  const newPwd = window.prompt(
+                                    `Enter new login password for ${s.full_name} (${s.reference_code}):`,
+                                    'KiaStaff2026!'
+                                  );
+                                  if (newPwd && newPwd.trim().length >= 6) {
+                                    const res = await fetch('/api/auth', {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({
+                                        action: 'CHANGE_PASSWORD',
+                                        target_staff_id: s.id,
+                                        new_password: newPwd.trim(),
+                                      }),
+                                    });
+                                    const j = await res.json();
+                                    if (j.ok) {
+                                      setToast({
+                                        type: 'success',
+                                        message: `Password reset for ${s.full_name}.`,
+                                      });
+                                    } else {
+                                      setToast({
+                                        type: 'error',
+                                        message: j.error || 'Failed to reset password.',
+                                      });
+                                    }
+                                  }
+                                }}
+                                className="text-blue-700 hover:text-blue-900 p-1 rounded hover:bg-blue-50 transition-colors"
+                                title="Reset Staff Password"
+                              >
+                                <KeyRound className="w-3.5 h-3.5" />
+                              </button>
+                              {!isCeoUser && (
+                                <button
+                                  onClick={() => {
+                                    if (
+                                      window.confirm(
+                                        `Are you sure you want to remove staff member ${s.full_name}? Any assigned cases will be reassigned to the CEO.`
+                                      )
+                                    ) {
+                                      dispatchAction('DELETE_STAFF', { staff_id: s.id });
+                                    }
+                                  }}
+                                  className="text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50 transition-colors"
+                                  title="Remove Staff"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
                           )}
                         </div>
                       </div>
@@ -2921,6 +3834,14 @@ export default function KiaIsmsApp() {
           state={state}
           onClose={() => setSelectedClient(null)}
           onAction={dispatchAction}
+        />
+      )}
+
+      {/* Official Printable Receipt / Invoice Modal */}
+      {printableDoc && (
+        <PrintableDocumentModal
+          doc={printableDoc}
+          onClose={() => setPrintableDoc(null)}
         />
       )}
     </div>

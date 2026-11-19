@@ -14,6 +14,9 @@ import {
   ShieldCheck,
   Plus,
   ExternalLink,
+  Edit3,
+  Save,
+  Download,
 } from 'lucide-react';
 
 interface ClientProfileModalProps {
@@ -40,6 +43,34 @@ export function ClientProfileModal({
   const [commChannel, setCommChannel] = useState('WhatsApp');
   const [commPurpose, setCommPurpose] = useState('');
   const [commNotes, setCommNotes] = useState('');
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [editForm, setEditForm] = useState({
+    first_name: client.first_name || '',
+    middle_name: client.middle_name || '',
+    last_name: client.last_name || '',
+    gender: client.gender || 'Male',
+    date_of_birth: client.date_of_birth || '',
+    phone: client.phone || '',
+    email: client.email || '',
+    city_town: client.city_town || '',
+    region: client.region || 'Greater Accra',
+    education_level: client.education_level || 'SHS/WASSCE',
+    profession: client.profession || '',
+    years_of_experience: client.years_of_experience ?? 0,
+    skills: client.skills || '',
+    driving_license: Boolean(client.driving_license),
+    license_class: client.license_class || '',
+    passport_available: Boolean(client.passport_available),
+    passport_number: client.passport_number || '',
+    passport_expiry_date: client.passport_expiry_date || '',
+    preferred_countries: client.preferred_countries || '',
+    preferred_sectors: client.preferred_sectors || '',
+    preferred_service: client.preferred_service || 'WORK ABROAD',
+    emergency_contact: client.emergency_contact || '',
+    client_status: client.client_status || 'NEW',
+    notes: client.notes || '',
+  });
 
   const cases = state.serviceCases.filter((sc: any) => sc.client_id === client.id);
   const matches = state.jobMatches.filter((m: any) => m.client_id === client.id);
@@ -174,58 +205,268 @@ export function ClientProfileModal({
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {activeTab === 'overview' && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-2 text-xs">
-                <h3 className="font-bold text-slate-900 text-sm mb-2">
-                  Personal & Professional Profile
-                </h3>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <span className="text-slate-500 block">Full Name</span>
-                    <span className="font-medium">{client.full_name}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 block">Date of Birth / Age</span>
-                    <span className="font-medium">
-                      {client.date_of_birth || 'N/A'} ({client.age ?? '?'} yrs)
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 block">Phone / WhatsApp</span>
-                    <span className="font-medium">{client.phone}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 block">Email</span>
-                    <span className="font-medium">{client.email || '—'}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 block">Profession / Experience</span>
-                    <span className="font-medium">
-                      {client.profession || '—'} ({client.years_of_experience} yrs)
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 block">Skills & Languages</span>
-                    <span className="font-medium">
-                      {client.skills || '—'} ({client.languages})
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 block">Preferred Destinations</span>
-                    <span className="font-medium">{client.preferred_countries || '—'}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 block">Preferred Sectors</span>
-                    <span className="font-medium">{client.preferred_sectors || '—'}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 block">Emergency Contact</span>
-                    <span className="font-medium">{client.emergency_contact || '—'}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 block">Passport Expiry</span>
-                    <span className="font-medium">{client.passport_expiry_date || 'None'}</span>
-                  </div>
+              <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-3 text-xs">
+                <div className="flex items-center justify-between mb-1">
+                  <h3 className="font-bold text-slate-900 text-sm">
+                    Personal & Professional Profile
+                  </h3>
+                  <button
+                    onClick={() => setIsEditing(!isEditing)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 font-semibold transition"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    {isEditing ? 'Cancel Edit' : 'Edit Profile'}
+                  </button>
                 </div>
+
+                {isEditing ? (
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-600 block mb-0.5">
+                        First Name *
+                      </label>
+                      <input
+                        type="text"
+                        value={editForm.first_name}
+                        onChange={(e) => setEditForm({ ...editForm, first_name: e.target.value })}
+                        className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-600 block mb-0.5">
+                        Last Name *
+                      </label>
+                      <input
+                        type="text"
+                        value={editForm.last_name}
+                        onChange={(e) => setEditForm({ ...editForm, last_name: e.target.value })}
+                        className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-600 block mb-0.5">
+                        Phone *
+                      </label>
+                      <input
+                        type="text"
+                        value={editForm.phone}
+                        onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+                        className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-600 block mb-0.5">
+                        Email
+                      </label>
+                      <input
+                        type="email"
+                        value={editForm.email}
+                        onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                        className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-600 block mb-0.5">
+                        Date of Birth
+                      </label>
+                      <input
+                        type="date"
+                        value={editForm.date_of_birth}
+                        onChange={(e) => setEditForm({ ...editForm, date_of_birth: e.target.value })}
+                        className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-600 block mb-0.5">
+                        Client Status
+                      </label>
+                      <select
+                        value={editForm.client_status}
+                        onChange={(e) => setEditForm({ ...editForm, client_status: e.target.value })}
+                        className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 bg-white"
+                      >
+                        <option value="NEW">NEW</option>
+                        <option value="AWAITING DOCUMENTS">AWAITING DOCUMENTS</option>
+                        <option value="READY FOR MATCHING">READY FOR MATCHING</option>
+                        <option value="NOTIFIED">NOTIFIED</option>
+                        <option value="INTERVIEW SCHEDULED">INTERVIEW SCHEDULED</option>
+                        <option value="SELECTED">SELECTED</option>
+                        <option value="IN PROCESS">IN PROCESS</option>
+                        <option value="PLACED">PLACED</option>
+                        <option value="INACTIVE">INACTIVE</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-600 block mb-0.5">
+                        Education Level
+                      </label>
+                      <select
+                        value={editForm.education_level}
+                        onChange={(e) =>
+                          setEditForm({ ...editForm, education_level: e.target.value })
+                        }
+                        className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 bg-white"
+                      >
+                        <option value="Basic/JHS">Basic/JHS</option>
+                        <option value="SHS/WASSCE">SHS/WASSCE</option>
+                        <option value="Vocational/Technical">Vocational/Technical</option>
+                        <option value="Diploma">Diploma</option>
+                        <option value="HND">HND</option>
+                        <option value="Bachelor's Degree">Bachelor&apos;s Degree</option>
+                        <option value="Master's Degree">Master&apos;s Degree</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-600 block mb-0.5">
+                        Profession & Exp (Yrs)
+                      </label>
+                      <div className="flex gap-1.5">
+                        <input
+                          type="text"
+                          value={editForm.profession}
+                          onChange={(e) => setEditForm({ ...editForm, profession: e.target.value })}
+                          placeholder="Profession"
+                          className="w-full rounded-lg border border-slate-300 px-2 py-1.5 bg-white"
+                        />
+                        <input
+                          type="number"
+                          value={editForm.years_of_experience}
+                          onChange={(e) =>
+                            setEditForm({
+                              ...editForm,
+                              years_of_experience: Number(e.target.value),
+                            })
+                          }
+                          className="w-16 rounded-lg border border-slate-300 px-2 py-1.5 bg-white"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-600 block mb-0.5">
+                        Passport Number
+                      </label>
+                      <input
+                        type="text"
+                        value={editForm.passport_number}
+                        onChange={(e) =>
+                          setEditForm({
+                            ...editForm,
+                            passport_number: e.target.value,
+                            passport_available: Boolean(e.target.value.trim()),
+                          })
+                        }
+                        placeholder="e.g. G1234567"
+                        className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-600 block mb-0.5">
+                        Passport Expiry
+                      </label>
+                      <input
+                        type="date"
+                        value={editForm.passport_expiry_date}
+                        onChange={(e) =>
+                          setEditForm({ ...editForm, passport_expiry_date: e.target.value })
+                        }
+                        className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-600 block mb-0.5">
+                        City / Town
+                      </label>
+                      <input
+                        type="text"
+                        value={editForm.city_town}
+                        onChange={(e) => setEditForm({ ...editForm, city_town: e.target.value })}
+                        className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-600 block mb-0.5">
+                        Driving License Class
+                      </label>
+                      <input
+                        type="text"
+                        value={editForm.license_class}
+                        onChange={(e) =>
+                          setEditForm({
+                            ...editForm,
+                            license_class: e.target.value,
+                            driving_license: Boolean(e.target.value.trim()),
+                          })
+                        }
+                        placeholder="None or B / C / F"
+                        className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 bg-white"
+                      />
+                    </div>
+                    <div className="col-span-2 pt-1">
+                      <button
+                        onClick={async () => {
+                          const res = await onAction('UPDATE_CLIENT', {
+                            client_id: client.id,
+                            ...editForm,
+                          });
+                          if (res) setIsEditing(false);
+                        }}
+                        className="w-full py-2 px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold flex items-center justify-center gap-1.5 transition"
+                      >
+                        <Save className="w-4 h-4" />
+                        Save Updated Client Profile
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <span className="text-slate-500 block">Full Name</span>
+                      <span className="font-medium">{client.full_name}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Date of Birth / Age</span>
+                      <span className="font-medium">
+                        {client.date_of_birth || 'N/A'} ({client.age ?? '?'} yrs)
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Phone / WhatsApp</span>
+                      <span className="font-medium">{client.phone}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Email</span>
+                      <span className="font-medium">{client.email || '—'}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Profession / Experience</span>
+                      <span className="font-medium">
+                        {client.profession || '—'} ({client.years_of_experience} yrs)
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Skills & Languages</span>
+                      <span className="font-medium">
+                        {client.skills || '—'} ({client.languages})
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Preferred Destinations</span>
+                      <span className="font-medium">{client.preferred_countries || '—'}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Preferred Sectors</span>
+                      <span className="font-medium">{client.preferred_sectors || '—'}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Emergency Contact</span>
+                      <span className="font-medium">{client.emergency_contact || '—'}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Passport Expiry</span>
+                      <span className="font-medium">{client.passport_expiry_date || 'None'}</span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-3 text-xs">
@@ -463,9 +704,22 @@ export function ClientProfileModal({
                     {d.expiry_date && (
                       <span className="ml-2 text-slate-500">(Expires: {d.expiry_date})</span>
                     )}
+                    {d.file_name && (
+                      <span className="ml-2 text-blue-700 font-medium">📎 {d.file_name}</span>
+                    )}
                     {d.notes && <p className="text-slate-500 mt-0.5">{d.notes}</p>}
                   </div>
                   <div className="flex items-center gap-2">
+                    {d.file_data_url && (
+                      <a
+                        href={d.file_data_url}
+                        download={d.file_name || `${d.reference_code}-${d.document_type}`}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 font-semibold hover:bg-blue-100"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        Download File
+                      </a>
+                    )}
                     <StatusBadge value={d.document_status} />
                   </div>
                 </div>
